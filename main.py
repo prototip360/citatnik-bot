@@ -1,32 +1,28 @@
+import asyncio
 import os
 import random
-import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiohttp import web  # Добавляем веб-сервер
 
-# --- Настройки ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен будет взят из переменной окружения на Render
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не найден! Установите переменную окружения.")
+    raise ValueError("BOT_TOKEN не найден!")
 
-# --- Набор цитат ---
 QUOTES = [
     "«Жизнь — это то, что с тобой происходит, пока ты строишь планы.» — Джон Леннон",
     "«В двух шагах от пропасти не бывает тупиков.» — Фридрих Ницше",
     "«Единственный способ делать великую работу — любить то, что ты делаешь.» — Стив Джобс",
     "«Не бойся медленного движения, бойся лишь стоять на месте.» — Конфуций",
     "«Гениальность — это 1% вдохновения и 99% пота.» — Томас Эдисон",
-    "«Тот, кто не рискует, не пьет шампанское.»",
     "«Дорогу осилит идущий.» — Сенека",
     "«Хочешь изменить мир — начни с себя.» — Махатма Ганди",
-    "«Самый трудный шаг — это шаг за порог.» — Антуан де Сент-Экзюпери",
     "«Успех — это умение двигаться от неудачи к неудаче, не теряя энтузиазма.» — Уинстон Черчилль",
 ]
 
-# --- Клавиатура с кнопкой "Новая цитата" ---
 def get_quote_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -34,26 +30,21 @@ def get_quote_button():
         ]
     )
 
-# --- Настройка логирования ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Инициализация бота ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- Команда /start ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer(
         "📖 <b>Привет! Я бот-цитатник</b>\n\n"
-        "Я храню коллекцию мудрых мыслей и вдохновляющих фраз.\n"
         "Нажми на кнопку ниже — я пришлю тебе случайную цитату!",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
 
-# --- Обработка нажатия на кнопку "Новая цитата" ---
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     random_quote = random.choice(QUOTES)
@@ -63,7 +54,6 @@ async def send_random_quote(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-# --- Команда /quote (как альтернатива кнопке) ---
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     random_quote = random.choice(QUOTES)
@@ -72,10 +62,27 @@ async def quote_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
-# --- Запуск бота ---
 async def main():
+    # Запускаем бота в фоне
+    polling_task = asyncio.create_task(dp.start_polling(bot))
+    
+    # Запускаем веб-сервер для UptimeRobot
+    app = web.Application()
+    
+    async def health_check(request):
+        return web.Response(text="OK")
+    
+    app.router.add_get("/healthz", health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8000)
+    await site.start()
+    
     logger.info("✅ Бот-цитатник запущен!")
-    await dp.start_polling(bot)
+    logger.info("✅ Веб-сервер для UptimeRobot на порту 8000")
+    
+    await polling_task
 
 if __name__ == "__main__":
     asyncio.run(main())
