@@ -47,12 +47,20 @@ async def start_command(message: types.Message):
 
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
-    random_quote = random.choice(QUOTES)
-    await callback_query.message.answer(
-        f"📜 {random_quote}",
-        reply_markup=get_quote_button()
-    )
-    await callback_query.answer()
+    try:
+        random_quote = random.choice(QUOTES)
+        await callback_query.message.answer(
+            f"📜 {random_quote}",
+            reply_markup=get_quote_button()
+        )
+        await callback_query.answer()
+    except Exception as e:
+        if "query is too old" in str(e) or "query ID is invalid" in str(e):
+            await callback_query.message.answer(
+                "⏳ Кнопка устарела. Нажми /start, чтобы получить новую!"
+            )
+        else:
+            logger.error(f"Ошибка: {e}")
 
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
