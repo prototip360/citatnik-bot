@@ -5,15 +5,17 @@ import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiohttp import web  # Добавляем веб-сервер
+from aiohttp import web
+from collections import defaultdict
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
+# --- Цитаты ---
 QUOTES = [
-    
+  
     "«Лучше конец света\n       чем конец у Светы» #1",
     "«Лучше с друзьями на велике\n       чем с чертями на гелике» #2",
     "«Охранник рынка единственный\n       кто следит за базаром» #3",
@@ -113,8 +115,43 @@ QUOTES = [
     "«В городе карликов всегда низкая преступность» #97",
     "«В казахском плове может быть до 3 лошадиных сил» #98",
     "«Заебали\n       Я не говорил такого» #99",
+    # Добавьте сюда все ваши 100 цитат
 ]
 
+# --- Система весов ---
+# Храним счётчик выпадений для каждой цитаты
+quote_weights = defaultdict(int)
+
+def get_weighted_quote():
+    """Выбирает цитату с учётом весов."""
+    
+    # Если все цитаты имеют вес 0, сбрасываем веса (даём им "отдохнуть")
+    if all(weight == 0 for weight in quote_weights.values()):
+        # Обнуляем все счётчики
+        for q in QUOTES:
+            quote_weights[q] = 0
+    
+    # Создаём список с весами
+    # Вес = 10 - количество выпадений (но не меньше 0)
+    weights = []
+    for quote in QUOTES:
+        weight = max(0, 10 - quote_weights[quote])
+        weights.append(weight)
+    
+    # Если все веса равны 0 (такое бывает, если все цитаты выпали 10 раз)
+    # то временно увеличиваем вес всем до 5
+    if sum(weights) == 0:
+        weights = [5 for _ in QUOTES]
+    
+    # Выбираем цитату с учётом весов
+    selected_quote = random.choices(QUOTES, weights=weights, k=1)[0]
+    
+    # Увеличиваем счётчик для выбранной цитаты
+    quote_weights[selected_quote] += 1
+    
+    return selected_quote
+
+# --- Кнопка ---
 def get_quote_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -122,12 +159,15 @@ def get_quote_button():
         ]
     )
 
+# --- Логирование ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Инициализация бота ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- Команда /start ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer(
@@ -137,10 +177,11 @@ async def start_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
+# --- Кнопка "Новая цитата" ---
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
-        random_quote = random.choice(QUOTES)
+        random_quote = get_weighted_quote()
         await callback_query.message.answer(
             f"📜 {random_quote}",
             reply_markup=get_quote_button()
@@ -154,19 +195,19 @@ async def send_random_quote(callback_query: types.CallbackQuery):
         else:
             logger.error(f"Ошибка: {e}")
 
+# --- Команда /quote ---
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
-    random_quote = random.choice(QUOTES)
+    random_quote = get_weighted_quote()
     await message.answer(
         f"📜 {random_quote}",
         reply_markup=get_quote_button()
     )
 
+# --- Запуск ---
 async def main():
-    # Запускаем бота в фоне
     polling_task = asyncio.create_task(dp.start_polling(bot))
     
-    # Запускаем веб-сервер для UptimeRobot
     app = web.Application()
     
     async def health_check(request):
@@ -180,7 +221,7 @@ async def main():
     await site.start()
     
     logger.info("✅ Бот-цитатник запущен!")
-    logger.info("✅ Веб-сервер для UptimeRobot на порту 8000")
+    logger.info("✅ Включена система 'умной случайности'")
     
     await polling_task
 
