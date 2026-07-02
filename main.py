@@ -52,9 +52,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer(
-        "📖 <b>Привет! Я бот-цитатник</b>\n\n"
-        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
-        "Ни одна цитата не повторится, пока не будут показаны все.",
+        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
