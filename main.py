@@ -6,16 +6,14 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiohttp import web
-from collections import defaultdict
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Цитаты ---
+# --- Цитаты (добавьте все свои) ---
 QUOTES = [
-  
     "«Лучше конец света\n       чем конец у Светы» #1",
     "«Лучше с друзьями на велике\n       чем с чертями на гелике» #2",
     "«Охранник рынка единственный\n       кто следит за базаром» #3",
@@ -115,41 +113,33 @@ QUOTES = [
     "«В городе карликов всегда низкая преступность» #97",
     "«В казахском плове может быть до 3 лошадиных сил» #98",
     "«Заебали\n       Я не говорил такого» #99",
+
     # Добавьте сюда все ваши 100 цитат
 ]
 
-# --- Система весов ---
-# Храним счётчик выпадений для каждой цитаты
-quote_weights = defaultdict(int)
+# --- Система "без повторений" ---
+# Создаём перемешанную копию списка
+shuffled_quotes = QUOTES.copy()
+random.shuffle(shuffled_quotes)
 
-def get_weighted_quote():
-    """Выбирает цитату с учётом весов."""
+# Индекс текущей цитаты
+current_index = 0
+
+def get_next_quote():
+    """Возвращает следующую цитату из перемешанного списка.
+       Когда список заканчивается — перемешивает его заново."""
+    global shuffled_quotes, current_index
     
-    # Если все цитаты имеют вес 0, сбрасываем веса (даём им "отдохнуть")
-    if all(weight == 0 for weight in quote_weights.values()):
-        # Обнуляем все счётчики
-        for q in QUOTES:
-            quote_weights[q] = 0
+    # Если дошли до конца списка — перемешиваем заново
+    if current_index >= len(shuffled_quotes):
+        shuffled_quotes = QUOTES.copy()
+        random.shuffle(shuffled_quotes)
+        current_index = 0
     
-    # Создаём список с весами
-    # Вес = 10 - количество выпадений (но не меньше 0)
-    weights = []
-    for quote in QUOTES:
-        weight = max(0, 10 - quote_weights[quote])
-        weights.append(weight)
-    
-    # Если все веса равны 0 (такое бывает, если все цитаты выпали 10 раз)
-    # то временно увеличиваем вес всем до 5
-    if sum(weights) == 0:
-        weights = [5 for _ in QUOTES]
-    
-    # Выбираем цитату с учётом весов
-    selected_quote = random.choices(QUOTES, weights=weights, k=1)[0]
-    
-    # Увеличиваем счётчик для выбранной цитаты
-    quote_weights[selected_quote] += 1
-    
-    return selected_quote
+    # Берём текущую цитату и двигаем индекс дальше
+    quote = shuffled_quotes[current_index]
+    current_index += 1
+    return quote
 
 # --- Кнопка ---
 def get_quote_button():
@@ -171,7 +161,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer(
-        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!",
+        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
@@ -180,9 +170,15 @@ async def start_command(message: types.Message):
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
-        random_quote = get_weighted_quote()
+        # Берём следующую цитату (без повторений)
+        random_quote = get_next_quote()
+        
+        # Показываем номер цитаты (например, 5 из 100)
+        total = len(QUOTES)
+        progress = f"({current_index} из {total})"
+        
         await callback_query.message.answer(
-            f"📜 {random_quote}",
+            f"📜 {random_quote}\n\n{progress}",
             reply_markup=get_quote_button()
         )
         await callback_query.answer()
@@ -197,9 +193,11 @@ async def send_random_quote(callback_query: types.CallbackQuery):
 # --- Команда /quote ---
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
-    random_quote = get_weighted_quote()
+    random_quote = get_next_quote()
+    total = len(QUOTES)
+    progress = f"({current_index} из {total})"
     await message.answer(
-        f"📜 {random_quote}",
+        f"📜 {random_quote}\n\n{progress}",
         reply_markup=get_quote_button()
     )
 
@@ -220,7 +218,7 @@ async def main():
     await site.start()
     
     logger.info("✅ Бот-цитатник запущен!")
-    logger.info("✅ Включена система 'умной случайности'")
+    logger.info("✅ Режим 'без повторений' активен")
     
     await polling_task
 
