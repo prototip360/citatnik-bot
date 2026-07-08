@@ -8,7 +8,6 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 from aiohttp import web
 
-# --- Импортируем цитаты ---
 from quotes import QUOTES
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -16,7 +15,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Файл для сохранения прогресса ---
 STATE_FILE = "state.json"
 
 def load_state():
@@ -36,7 +34,6 @@ def save_state(shuffled_quotes, current_index):
             "current_index": current_index
         }, f, ensure_ascii=False, indent=2)
 
-# --- Загружаем состояние ---
 shuffled_quotes, current_index = load_state()
 
 def get_next_quote():
@@ -55,7 +52,6 @@ def reset_progress():
     current_index = 0
     save_state(shuffled_quotes, current_index)
 
-# --- Кнопка "Новая цитата" ---
 def get_quote_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -63,7 +59,6 @@ def get_quote_button():
         ]
     )
 
-# --- Кнопка "Начать заново" ---
 def get_reset_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -71,14 +66,12 @@ def get_reset_button():
         ]
     )
 
-# --- Логирование ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- Команда /start ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     reset_progress()
@@ -89,13 +82,20 @@ async def start_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
-# --- Отправка поздравления (одно сообщение: фото + подпись) ---
 async def send_congratulation(message: types.Message):
     photo_path = "congratulation.jpg"
     
-    # Подпись к фото
+    # Получаем имя пользователя
+    user = message.from_user
+    if user.first_name:
+        user_name = user.first_name
+    elif user.username:
+        user_name = f"@{user.username}"
+    else:
+        user_name = "Друг"
+    
     caption = (
-        f"🎉 <b>Поздравляю!</b> 🎉\n\n"
+        f"🎉 <b>Поздравляю, {user_name}!</b> 🎉\n\n"
         f"Ты открыл все <b>{len(QUOTES)}</b> цитат!\n"
         f"Нажми на кнопку, чтобы начать новый круг."
     )
@@ -109,14 +109,12 @@ async def send_congratulation(message: types.Message):
                 reply_markup=get_reset_button()
             )
     except FileNotFoundError:
-        # Если фото нет — отправляем текстом
         await message.answer(
             caption,
             parse_mode="HTML",
             reply_markup=get_reset_button()
         )
 
-# --- Кнопка "Новая цитата" ---
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
@@ -140,7 +138,6 @@ async def send_random_quote(callback_query: types.CallbackQuery):
         else:
             logger.error(f"Ошибка: {e}")
 
-# --- Кнопка "Начать заново" ---
 @dp.callback_query(lambda c: c.data == "reset_progress")
 async def reset_callback(callback_query: types.CallbackQuery):
     reset_progress()
@@ -159,7 +156,6 @@ async def reset_callback(callback_query: types.CallbackQuery):
     )
     await callback_query.answer()
 
-# --- Команда /quote ---
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     quote = get_next_quote()
@@ -171,7 +167,6 @@ async def quote_command(message: types.Message):
             reply_markup=get_quote_button()
         )
 
-# --- Команда /reset ---
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
     reset_progress()
@@ -182,7 +177,6 @@ async def reset_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
-# --- Запуск ---
 async def main():
     polling_task = asyncio.create_task(dp.start_polling(bot))
     
