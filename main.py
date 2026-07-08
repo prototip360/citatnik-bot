@@ -5,10 +5,10 @@ import json
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
 from aiohttp import web
 
-# --- Импортируем цитаты из отдельного файла ---
+# --- Импортируем цитаты ---
 from quotes import QUOTES
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -20,51 +20,54 @@ if not BOT_TOKEN:
 STATE_FILE = "state.json"
 
 def load_state():
-    """Загружает сохранённое состояние (порядок цитат и текущий индекс)"""
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data.get("shuffled_quotes", []), data.get("current_index", 0)
     except (FileNotFoundError, json.JSONDecodeError):
-        # Если файла нет — создаём новый перемешанный список
         shuffled = QUOTES.copy()
         random.shuffle(shuffled)
         return shuffled, 0
 
 def save_state(shuffled_quotes, current_index):
-    """Сохраняет текущее состояние в файл"""
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({
             "shuffled_quotes": shuffled_quotes,
             "current_index": current_index
         }, f, ensure_ascii=False, indent=2)
 
-# --- Загружаем состояние при запуске ---
+# --- Загружаем состояние ---
 shuffled_quotes, current_index = load_state()
 
 def get_next_quote():
-    """Возвращает следующую цитату и сохраняет прогресс"""
     global shuffled_quotes, current_index
-    
-    # Если дошли до конца — перемешиваем заново
     if current_index >= len(shuffled_quotes):
-        shuffled_quotes = QUOTES.copy()
-        random.shuffle(shuffled_quotes)
-        current_index = 0
-    
+        return None
     quote = shuffled_quotes[current_index]
     current_index += 1
-    
-    # Сохраняем прогресс в файл
     save_state(shuffled_quotes, current_index)
-    
     return quote
 
-# --- Кнопка ---
+def reset_progress():
+    global shuffled_quotes, current_index
+    shuffled_quotes = QUOTES.copy()
+    random.shuffle(shuffled_quotes)
+    current_index = 0
+    save_state(shuffled_quotes, current_index)
+
+# --- Кнопка "Новая цитата" ---
 def get_quote_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎲 Новая цитата", callback_data="get_quote")]
+        ]
+    )
+
+# --- Кнопка "Начать заново" ---
+def get_reset_button():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Начать заново", callback_data="reset_progress")]
         ]
     )
 
@@ -78,29 +81,57 @@ dp = Dispatcher()
 # --- Команда /start ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    # Сброс прогресса при команде /start
-    global shuffled_quotes, current_index
-    shuffled_quotes = QUOTES.copy()
-    random.shuffle(shuffled_quotes)
-    current_index = 0
-    save_state(shuffled_quotes, current_index)
-    
+    reset_progress()
     await message.answer(
-        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n",
+        "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
+        f"Всего цитат: <b>{len(QUOTES)}</b>",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
+
+# --- Отправка поздравления (одно сообщение: фото + подпись) ---
+async def send_congratulation(message: types.Message):
+    photo_path = "congratulation.jpg"
+    
+    # Подпись к фото
+    caption = (
+        f"🎉 <b>Поздравляю!</b> 🎉\n\n"
+        f"Ты открыл все <b>{len(QUOTES)}</b> цитат!\n"
+        f"Нажми на кнопку, чтобы начать новый круг."
+    )
+    
+    try:
+        with open(photo_path, "rb") as photo:
+            await message.answer_photo(
+                photo=InputFile(photo),
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=get_reset_button()
+            )
+    except FileNotFoundError:
+        # Если фото нет — отправляем текстом
+        await message.answer(
+            caption,
+            parse_mode="HTML",
+            reply_markup=get_reset_button()
+        )
 
 # --- Кнопка "Новая цитата" ---
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
-        random_quote = get_next_quote()
-        await callback_query.message.answer(
-            f"📜 {random_quote}",
-            reply_markup=get_quote_button()
-        )
+        quote = get_next_quote()
+        
+        if quote is None:
+            await send_congratulation(callback_query.message)
+        else:
+            await callback_query.message.answer(
+                f"📜 {quote}",
+                reply_markup=get_quote_button()
+            )
+        
         await callback_query.answer()
+        
     except Exception as e:
         if "query is too old" in str(e) or "query ID is invalid" in str(e):
             await callback_query.message.answer(
@@ -109,24 +140,47 @@ async def send_random_quote(callback_query: types.CallbackQuery):
         else:
             logger.error(f"Ошибка: {e}")
 
+# --- Кнопка "Начать заново" ---
+@dp.callback_query(lambda c: c.data == "reset_progress")
+async def reset_callback(callback_query: types.CallbackQuery):
+    reset_progress()
+    first_quote = shuffled_quotes[0]
+    global current_index
+    current_index = 1
+    save_state(shuffled_quotes, current_index)
+    
+    await callback_query.message.answer(
+        f"🔄 <b>Новый круг!</b>\n\n"
+        f"Все цитаты перемешаны!\n"
+        f"Первая цитата:\n\n"
+        f"📜 {first_quote}",
+        parse_mode="HTML",
+        reply_markup=get_quote_button()
+    )
+    await callback_query.answer()
+
 # --- Команда /quote ---
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
-    random_quote = get_next_quote()
-    await message.answer(
-        f"📜 {random_quote}",
-        reply_markup=get_quote_button()
-    )
+    quote = get_next_quote()
+    if quote is None:
+        await send_congratulation(message)
+    else:
+        await message.answer(
+            f"📜 {quote}",
+            reply_markup=get_quote_button()
+        )
 
-# --- Команда /reset (сброс прогресса) ---
+# --- Команда /reset ---
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
-    global shuffled_quotes, current_index
-    shuffled_quotes = QUOTES.copy()
-    random.shuffle(shuffled_quotes)
-    current_index = 0
-    save_state(shuffled_quotes, current_index)
-    await message.answer("🔄 Прогресс сброшен. Цитаты начинаются сначала!")
+    reset_progress()
+    await message.answer(
+        f"🔄 Прогресс сброшен. Цитаты начинаются сначала!\n"
+        f"Всего цитат: <b>{len(QUOTES)}</b>",
+        parse_mode="HTML",
+        reply_markup=get_quote_button()
+    )
 
 # --- Запуск ---
 async def main():
@@ -145,8 +199,7 @@ async def main():
     await site.start()
     
     logger.info("✅ Бот-цитатник запущен!")
-    logger.info(f"✅ Загружено {len(QUOTES)} цитат из файла quotes.py")
-    logger.info(f"✅ Текущий прогресс: {current_index} из {len(QUOTES)}")
+    logger.info(f"✅ Загружено {len(QUOTES)} цитат")
     
     await polling_task
 
