@@ -85,7 +85,6 @@ async def start_command(message: types.Message):
 async def send_congratulation(message: types.Message):
     photo_path = "congratulation.jpg"
     
-    # Получаем имя пользователя
     user = message.from_user
     if user.first_name:
         user_name = user.first_name
@@ -181,7 +180,7 @@ async def reset_command(message: types.Message):
 async def congratulate_command(message: types.Message):
     """Принудительно показывает поздравление (для теста)"""
     await send_congratulation(message)
-    
+
 async def main():
     polling_task = asyncio.create_task(dp.start_polling(bot))
     
