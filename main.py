@@ -177,6 +177,11 @@ async def reset_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
+@dp.message(Command("congratulate"))
+async def congratulate_command(message: types.Message):
+    """Принудительно показывает поздравление (для теста)"""
+    await send_congratulation(message)
+    
 async def main():
     polling_task = asyncio.create_task(dp.start_polling(bot))
     
