@@ -5,7 +5,7 @@ import json
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiohttp import web
 
 from quotes import QUOTES
@@ -100,14 +100,21 @@ async def send_congratulation(message: types.Message):
     )
     
     try:
-        with open(photo_path, "rb") as photo:
-            await message.answer_photo(
-                photo=InputFile(photo),
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=get_reset_button()
-            )
+        photo = FSInputFile(photo_path)
+        await message.answer_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=get_reset_button()
+        )
     except FileNotFoundError:
+        await message.answer(
+            caption,
+            parse_mode="HTML",
+            reply_markup=get_reset_button()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото: {e}")
         await message.answer(
             caption,
             parse_mode="HTML",
