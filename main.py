@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, MenuButtonCommands
 from aiohttp import web
 
 from quotes import QUOTES
@@ -101,9 +101,20 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- Установка меню команд ---
+async def set_commands():
+    commands = [
+        BotCommand(command="start", description="Начать заново"),
+        BotCommand(command="quote", description="Получить цитату"),
+        BotCommand(command="reset", description="Сбросить прогресс"),
+        BotCommand(command="help", description="Помощь"),
+        BotCommand(command="congratulate", description="Поздравление"),
+        BotCommand(command="stop_notify", description="Отписаться от уведомлений"),
+    ]
+    await bot.set_my_commands(commands)
+
 # --- ЕЖЕДНЕВНОЕ УВЕДОМЛЕНИЕ ---
 async def send_daily_notification():
-    """Отправляет уведомление всем пользователям"""
     if not users:
         logger.info("Нет пользователей для уведомления")
         return
@@ -123,7 +134,6 @@ async def send_daily_notification():
             logger.error(f"Не удалось отправить уведомление {user_id}: {e}")
 
 async def daily_task():
-    """Задача, которая выполняется каждый день в 10:00"""
     while True:
         now = datetime.now()
         target = datetime(now.year, now.month, now.day, 10, 0, 0)
@@ -158,7 +168,9 @@ async def help_command(message: types.Message):
     help_text = (
         "📖 <b>Команды бота-цитатника</b>\n\n"
         "/start — начать заново\n"
+        "/quote — получить следующую цитату\n"
         "/reset — сбросить прогресс\n"
+        "/congratulate — показать поздравление\n"
         "/stop_notify — отписаться от уведомлений\n"
         "/help — это сообщение"
     )
@@ -284,6 +296,12 @@ async def reset_callback(callback_query: types.CallbackQuery):
 
 # --- ЗАПУСК ---
 async def main():
+    # Устанавливаем меню команд
+    await set_commands()
+    
+    # Включаем постоянное меню снизу
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+    
     asyncio.create_task(daily_task())
     
     polling_task = asyncio.create_task(dp.start_polling(bot))
@@ -303,6 +321,7 @@ async def main():
     logger.info("✅ Бот-цитатник запущен!")
     logger.info(f"✅ Загружено {len(QUOTES)} цитат")
     logger.info(f"✅ Подписчиков на уведомления: {len(users)}")
+    logger.info("✅ Постоянное меню включено")
     
     await polling_task
 
