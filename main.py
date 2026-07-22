@@ -16,11 +16,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Файлы ---
+# --- Файл для сохранения прогресса ---
 STATE_FILE = "state.json"
+
+# --- Загрузка пользователей (для уведомлений) ---
 USERS_FILE = "users.json"
 
-# --- Загрузка пользователей ---
 def load_users():
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
@@ -55,9 +56,12 @@ def save_state(shuffled_quotes, current_index):
 shuffled_quotes, current_index = load_state()
 
 def get_next_quote():
+    """Возвращает следующую цитату и сохраняет прогресс"""
     global shuffled_quotes, current_index
+    
     if current_index >= len(shuffled_quotes):
         return None
+    
     quote = shuffled_quotes[current_index]
     current_index += 1
     save_state(shuffled_quotes, current_index)
@@ -77,7 +81,7 @@ MORNING_MESSAGES = [
     "☀️ Отличное утро! Готов получить вдохновение?",
     "🌟 Доброе утро! Нажми на кнопку — получи цитату дня!",
     "🍀 Утро добрым не бывает, но цитата его исправит!",
-    "Джейсон навалил, мудрости отборной. Пора разгрибать!",
+    "Джейсон навалил мудрости отборной, пора разгрибать!",
 ]
 
 def get_quote_button():
@@ -108,8 +112,6 @@ async def set_commands():
         BotCommand(command="quote", description="Получить цитату"),
         BotCommand(command="reset", description="Сбросить прогресс"),
         BotCommand(command="help", description="Помощь"),
-        BotCommand(command="congratulate", description="Поздравление"),
-        BotCommand(command="stop_notify", description="Отписаться от уведомлений"),
     ]
     await bot.set_my_commands(commands)
 
@@ -127,7 +129,8 @@ async def send_daily_notification():
                 chat_id=user_id,
                 text=f"{morning_text}",
                 parse_mode="HTML",
-                reply_markup=get_quote_button()
+                reply_markup=get_quote_button(),
+                disable_notification=True
             )
             logger.info(f"Уведомление отправлено пользователю {user_id}")
         except Exception as e:
@@ -136,14 +139,13 @@ async def send_daily_notification():
 async def daily_task():
     while True:
         now = datetime.now()
-        target = datetime(now.year, now.month, now.day, 10, 0, 0)
+        target = datetime(now.year, now.month, now.day, 5, 0, 0)  # 8:00 МСК
         if now >= target:
             target = target + timedelta(days=1)
         
         wait_seconds = (target - now).total_seconds()
-        logger.info(f"Следующее уведомление в {target.strftime('%H:%M')}")
+        logger.info(f"Следующее уведомление в {target.strftime('%H:%M')} UTC")
         await asyncio.sleep(wait_seconds)
-        
         await send_daily_notification()
 
 # --- КОМАНДЫ ---
@@ -155,6 +157,7 @@ async def start_command(message: types.Message):
     
     reset_progress()
     await message.answer(
+        "📖 <b>Привет! Я бот-цитатник</b>\n\n"
         "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
         f"Всего цитат: <b>{len(QUOTES)}</b>\n\n"
         "🌅 Каждое утро я буду присылать тебе вдохновляющее сообщение!\n"
@@ -195,7 +198,8 @@ async def quote_command(message: types.Message):
     else:
         await message.answer(
             f"📜 {quote}",
-            reply_markup=get_quote_button()
+            reply_markup=get_quote_button(),
+            disable_notification=True
         )
 
 @dp.message(Command("reset"))
@@ -236,7 +240,8 @@ async def send_congratulation(message: types.Message):
             photo=photo,
             caption=caption,
             parse_mode="HTML",
-            reply_markup=get_reset_button()
+            reply_markup=get_reset_button(),
+            disable_notification=True
         )
     except FileNotFoundError:
         await message.answer(
@@ -263,7 +268,8 @@ async def send_random_quote(callback_query: types.CallbackQuery):
         else:
             await callback_query.message.answer(
                 f"📜 {quote}",
-                reply_markup=get_quote_button()
+                reply_markup=get_quote_button(),
+                disable_notification=True
             )
         
         await callback_query.answer()
