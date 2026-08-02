@@ -16,8 +16,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Файл для сохранения прогресса ---
-STATE_FILE = "state.json"
+# --- Файл для сохранения прогресса ПОЛЬЗОВАТЕЛЕЙ ---
+PROGRESS_FILE = "user_progress.json"
 
 # --- Загрузка пользователей (для уведомлений) ---
 USERS_FILE = "users.json"
@@ -35,53 +35,60 @@ def save_users(users):
 
 users = load_users()
 
-# --- Состояние цитат ---
-def load_state():
+# --- Загрузка прогресса для всех пользователей ---
+def load_user_progress():
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data.get("shuffled_quotes", []), data.get("current_index", 0)
+        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_user_progress(progress):
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+        json.dump(progress, f, ensure_ascii=False, indent=2)
+
+user_progress = load_user_progress()
+
+def get_user_state(user_id: int):
+    if str(user_id) not in user_progress:
         shuffled = QUOTES.copy()
         random.shuffle(shuffled)
-        return shuffled, 0
+        user_progress[str(user_id)] = {
+            "shuffled_quotes": shuffled,
+            "current_index": 0
+        }
+        save_user_progress(user_progress)
+    return user_progress[str(user_id)]
 
-def save_state(shuffled_quotes, current_index):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "shuffled_quotes": shuffled_quotes,
-            "current_index": current_index
-        }, f, ensure_ascii=False, indent=2)
-
-shuffled_quotes, current_index = load_state()
-
-def get_next_quote():
-    """Возвращает следующую цитату и сохраняет прогресс"""
-    global shuffled_quotes, current_index
+def get_next_quote_for_user(user_id: int):
+    state = get_user_state(user_id)
+    shuffled = state["shuffled_quotes"]
+    index = state["current_index"]
     
-    if current_index >= len(shuffled_quotes):
+    if index >= len(shuffled):
         return None
     
-    quote = shuffled_quotes[current_index]
-    current_index += 1
-    save_state(shuffled_quotes, current_index)
+    quote = shuffled[index]
+    state["current_index"] = index + 1
+    save_user_progress(user_progress)
     return quote
 
-def reset_progress():
-    global shuffled_quotes, current_index
-    shuffled_quotes = QUOTES.copy()
-    random.shuffle(shuffled_quotes)
-    current_index = 0
-    save_state(shuffled_quotes, current_index)
+def reset_progress_for_user(user_id: int):
+    shuffled = QUOTES.copy()
+    random.shuffle(shuffled)
+    user_progress[str(user_id)] = {
+        "shuffled_quotes": shuffled,
+        "current_index": 0
+    }
+    save_user_progress(user_progress)
 
 # --- Варианты утренних сообщений ---
 MORNING_MESSAGES = [
-    "🌅 Доброе утро! Пора получить новую цитату!",
-    "📖 Новый день — новая цитата!",
-    "☀️ Отличное утро! Готов получить вдохновение?",
-    "🌟 Доброе утро! Нажми на кнопку — получи цитату дня!",
-    "🍀 Утро добрым не бывает, но цитата его исправит!",
-    "Джейсон навалил мудрости отборной, пора разгрибать!",
+    "🌅 Доброе утро! Вот твоя цитата дня:",
+    "📖 Новый день — новая цитата:",
+    "☀️ Отличное утро! Лови вдохновение:",
+    "🌟 Доброе утро! Твоя цитата:",
+    "🍀 Утро добрым не бывает, но цитата его исправит:",
 ]
 
 def get_quote_button():
@@ -116,23 +123,75 @@ async def set_commands():
     await bot.set_my_commands(commands)
 
 # --- ЕЖЕДНЕВНОЕ УВЕДОМЛЕНИЕ ---
+async def send_congratulation_to_user(user_id: int, chat_id: int):
+    """Отправляет поздравление конкретному пользователю"""
+    user = await bot.get_chat(user_id)
+    if user.first_name:
+        user_name = user.first_name
+    elif user.username:
+        user_name = f"@{user.username}"
+    else:
+        user_name = "Друг"
+    
+    caption = (
+        f"🎉 <b>Поздравляю, {user_name}!</b> 🎉\n\n"
+        f"Ты прошёл все <b>{len(QUOTES)}</b> цитат!\n"
+        f"Нажми на кнопку, чтобы начать новый круг."
+    )
+    
+    reset_progress_for_user(user_id)
+    
+    try:
+        photo = FSInputFile("congratulation.jpg")
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=get_quote_button(),
+            disable_notification=True
+        )
+    except FileNotFoundError:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode="HTML",
+            reply_markup=get_quote_button()
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при отправке поздравления: {e}")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode="HTML",
+            reply_markup=get_quote_button()
+        )
+
 async def send_daily_notification():
     if not users:
         logger.info("Нет пользователей для уведомления")
         return
     
-    morning_text = random.choice(MORNING_MESSAGES)
-    
     for user_id in users:
         try:
+            # Берём следующую цитату для пользователя
+            quote = get_next_quote_for_user(user_id)
+            morning_text = random.choice(MORNING_MESSAGES)
+            
+            # Если цитаты закончились — отправляем поздравление
+            if quote is None:
+                await send_congratulation_to_user(user_id, user_id)
+                continue
+            
             await bot.send_message(
                 chat_id=user_id,
-                text=f"{morning_text}",
+                text=f"{morning_text}\n\n📜 {quote}",
                 parse_mode="HTML",
                 reply_markup=get_quote_button(),
                 disable_notification=True
             )
-            logger.info(f"Уведомление отправлено пользователю {user_id}")
+            logger.info(f"Уведомление с цитатой отправлено пользователю {user_id}")
+            
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление {user_id}: {e}")
 
@@ -152,15 +211,16 @@ async def daily_task():
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     global users
-    users.add(message.from_user.id)
+    user_id = message.from_user.id
+    users.add(user_id)
     save_users(users)
     
-    reset_progress()
+    reset_progress_for_user(user_id)
     await message.answer(
         "📖 <b>Привет! Я бот-цитатник</b>\n\n"
         "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
         f"Всего цитат: <b>{len(QUOTES)}</b>\n\n"
-        "🌅 Каждое утро я буду присылать тебе вдохновляющее сообщение!\n"
+        "🌅 Каждое утро я буду присылать тебе цитату дня!\n"
         "Команды: /help — список всех команд",
         parse_mode="HTML",
         reply_markup=get_quote_button()
@@ -173,8 +233,6 @@ async def help_command(message: types.Message):
         "/start — начать заново\n"
         "/quote — получить следующую цитату\n"
         "/reset — сбросить прогресс\n"
-        "/congratulate — показать поздравление\n"
-        "/stop_notify — отписаться от уведомлений\n"
         "/help — это сообщение"
     )
     await message.answer(help_text, parse_mode="HTML")
@@ -192,7 +250,8 @@ async def stop_notify_command(message: types.Message):
 
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
-    quote = get_next_quote()
+    user_id = message.from_user.id
+    quote = get_next_quote_for_user(user_id)
     if quote is None:
         await send_congratulation(message)
     else:
@@ -204,7 +263,8 @@ async def quote_command(message: types.Message):
 
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
-    reset_progress()
+    user_id = message.from_user.id
+    reset_progress_for_user(user_id)
     await message.answer(
         f"🔄 Прогресс сброшен. Цитаты начинаются сначала!\n"
         f"Всего цитат: <b>{len(QUOTES)}</b>",
@@ -212,13 +272,9 @@ async def reset_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
-@dp.message(Command("congratulate"))
-async def congratulate_command(message: types.Message):
-    await send_congratulation(message)
-
 # --- ПОЗДРАВЛЕНИЕ ---
 async def send_congratulation(message: types.Message):
-    photo_path = "congratulation.jpg"
+    user_id = message.from_user.id
     
     user = message.from_user
     if user.first_name:
@@ -230,38 +286,41 @@ async def send_congratulation(message: types.Message):
     
     caption = (
         f"🎉 <b>Поздравляю, {user_name}!</b> 🎉\n\n"
-        f"Ты открыл все <b>{len(QUOTES)}</b> цитат!\n"
+        f"Ты прошёл все <b>{len(QUOTES)}</b> цитат!\n"
         f"Нажми на кнопку, чтобы начать новый круг."
     )
     
+    reset_progress_for_user(user_id)
+    
     try:
-        photo = FSInputFile(photo_path)
+        photo = FSInputFile("congratulation.jpg")
         await message.answer_photo(
             photo=photo,
             caption=caption,
             parse_mode="HTML",
-            reply_markup=get_reset_button(),
+            reply_markup=get_quote_button(),
             disable_notification=True
         )
     except FileNotFoundError:
         await message.answer(
             caption,
             parse_mode="HTML",
-            reply_markup=get_reset_button()
+            reply_markup=get_quote_button()
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке фото: {e}")
         await message.answer(
             caption,
             parse_mode="HTML",
-            reply_markup=get_reset_button()
+            reply_markup=get_quote_button()
         )
 
 # --- КНОПКИ ---
 @dp.callback_query(lambda c: c.data == "get_quote")
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
-        quote = get_next_quote()
+        user_id = callback_query.from_user.id
+        quote = get_next_quote_for_user(user_id)
         
         if quote is None:
             await send_congratulation(callback_query.message)
@@ -284,11 +343,9 @@ async def send_random_quote(callback_query: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "reset_progress")
 async def reset_callback(callback_query: types.CallbackQuery):
-    reset_progress()
-    first_quote = shuffled_quotes[0]
-    global current_index
-    current_index = 1
-    save_state(shuffled_quotes, current_index)
+    user_id = callback_query.from_user.id
+    reset_progress_for_user(user_id)
+    first_quote = get_next_quote_for_user(user_id)
     
     await callback_query.message.answer(
         f"🔄 <b>Новый круг!</b>\n\n"
@@ -302,10 +359,7 @@ async def reset_callback(callback_query: types.CallbackQuery):
 
 # --- ЗАПУСК ---
 async def main():
-    # Устанавливаем меню команд
     await set_commands()
-    
-    # Включаем постоянное меню снизу
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
     
     asyncio.create_task(daily_task())
@@ -327,7 +381,6 @@ async def main():
     logger.info("✅ Бот-цитатник запущен!")
     logger.info(f"✅ Загружено {len(QUOTES)} цитат")
     logger.info(f"✅ Подписчиков на уведомления: {len(users)}")
-    logger.info("✅ Постоянное меню включено")
     
     await polling_task
 
