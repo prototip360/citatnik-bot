@@ -124,13 +124,10 @@ async def set_commands():
 
 # --- ЕЖЕДНЕВНОЕ УВЕДОМЛЕНИЕ ---
 async def send_congratulation_to_user(user_id: int, chat_id: int):
-    """Отправляет поздравление конкретному пользователю"""
-    user = await bot.get_chat(user_id)
-    if user.first_name:
-        user_name = user.first_name
-    elif user.username:
-        user_name = f"@{user.username}"
-    else:
+    try:
+        user = await bot.get_chat(user_id)
+        user_name = user.first_name or user.username or "Друг"
+    except:
         user_name = "Друг"
     
     caption = (
@@ -148,15 +145,15 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
             photo=photo,
             caption=caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button(),
-            disable_notification=True
+            reply_markup=get_reset_button(),
+            disable_notification=False
         )
     except FileNotFoundError:
         await bot.send_message(
             chat_id=chat_id,
             text=caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button()
+            reply_markup=get_reset_button()
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке поздравления: {e}")
@@ -164,7 +161,7 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
             chat_id=chat_id,
             text=caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button()
+            reply_markup=get_reset_button()
         )
 
 async def send_daily_notification():
@@ -174,11 +171,9 @@ async def send_daily_notification():
     
     for user_id in users:
         try:
-            # Берём следующую цитату для пользователя
             quote = get_next_quote_for_user(user_id)
             morning_text = random.choice(MORNING_MESSAGES)
             
-            # Если цитаты закончились — отправляем поздравление
             if quote is None:
                 await send_congratulation_to_user(user_id, user_id)
                 continue
@@ -188,7 +183,7 @@ async def send_daily_notification():
                 text=f"{morning_text}\n\n📜 {quote}",
                 parse_mode="HTML",
                 reply_markup=get_quote_button(),
-                disable_notification=True
+                disable_notification=False
             )
             logger.info(f"Уведомление с цитатой отправлено пользователю {user_id}")
             
@@ -198,7 +193,7 @@ async def send_daily_notification():
 async def daily_task():
     while True:
         now = datetime.now()
-        target = datetime(now.year, now.month, now.day, 5, 0, 0)  # 8:00 МСК
+        target = datetime(now.year, now.month, now.day, 5, 0, 0)
         if now >= target:
             target = target + timedelta(days=1)
         
@@ -272,17 +267,17 @@ async def reset_command(message: types.Message):
         reply_markup=get_quote_button()
     )
 
+@dp.message(Command("congratulate"))
+async def congratulate_command(message: types.Message):
+    await send_congratulation(message)
+
 # --- ПОЗДРАВЛЕНИЕ ---
 async def send_congratulation(message: types.Message):
+    photo_path = "congratulation.jpg"
     user_id = message.from_user.id
     
     user = message.from_user
-    if user.first_name:
-        user_name = user.first_name
-    elif user.username:
-        user_name = f"@{user.username}"
-    else:
-        user_name = "Друг"
+    user_name = user.first_name or user.username or "Друг"
     
     caption = (
         f"🎉 <b>Поздравляю, {user_name}!</b> 🎉\n\n"
@@ -293,26 +288,26 @@ async def send_congratulation(message: types.Message):
     reset_progress_for_user(user_id)
     
     try:
-        photo = FSInputFile("congratulation.jpg")
+        photo = FSInputFile(photo_path)
         await message.answer_photo(
             photo=photo,
             caption=caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button(),
+            reply_markup=get_reset_button(),
             disable_notification=True
         )
     except FileNotFoundError:
         await message.answer(
             caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button()
+            reply_markup=get_reset_button()
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке фото: {e}")
         await message.answer(
             caption,
             parse_mode="HTML",
-            reply_markup=get_quote_button()
+            reply_markup=get_reset_button()
         )
 
 # --- КНОПКИ ---
