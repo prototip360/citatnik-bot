@@ -164,12 +164,6 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке поздравления: {e}")
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            parse_mode="HTML",
-            reply_markup=get_reset_button()
-        )
 
 async def send_daily_notification():
     if not users:
@@ -223,7 +217,10 @@ async def start_command(message: types.Message):
         "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
         f"Всего цитат: <b>{len(QUOTES)}</b>\n\n"
         "🌅 Каждое утро я буду присылать тебе цитату дня!\n"
-        "Команды: /help — список всех команд",
+        "Команды: /help — список всех команд\n\n"
+        "📢 <b>Новинка!</b>\n"
+        "Теперь меня можно добавить в любую группу.\n"
+        "Просто напиши в чате <b>цитата</b> — и я отвечу!",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
@@ -239,17 +236,26 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text, parse_mode="HTML")
 
-# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ (без регистра) ---
+# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ ---
+# В группах — общий прогресс для всей группы
+# В личных чатах — свой прогресс у каждого пользователя
 @dp.message(lambda message: message.text and "цитата" in message.text.lower())
 async def quote_by_keyword(message: types.Message):
-    user_id = message.from_user.id
-    quote = get_next_quote_for_user(user_id)
+    # Определяем, для кого берём прогресс
+    if message.chat.type in ["group", "supergroup"]:
+        # В группе — общий прогресс для всей группы
+        chat_id = message.chat.id
+        quote = get_next_quote_for_user(chat_id)
+    else:
+        # В личном чате — прогресс для пользователя
+        user_id = message.from_user.id
+        quote = get_next_quote_for_user(user_id)
     
     if quote is None:
         await send_congratulation(message)
     else:
         if message.chat.type in ["group", "supergroup"]:
-            await message.reply(
+            await message.answer(
                 f"📜 {quote}",
                 disable_notification=True
             )
