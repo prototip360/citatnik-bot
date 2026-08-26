@@ -239,6 +239,27 @@ async def help_command(message: types.Message):
     )
     await message.answer(help_text, parse_mode="HTML")
 
+# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ (без регистра) ---
+@dp.message(lambda message: message.text and "цитата" in message.text.lower())
+async def quote_by_keyword(message: types.Message):
+    user_id = message.from_user.id
+    quote = get_next_quote_for_user(user_id)
+    
+    if quote is None:
+        await send_congratulation(message)
+    else:
+        if message.chat.type in ["group", "supergroup"]:
+            await message.reply(
+                f"📜 {quote}",
+                disable_notification=True
+            )
+        else:
+            await message.answer(
+                f"📜 {quote}",
+                reply_markup=get_quote_button(),
+                disable_notification=True
+            )
+
 @dp.message(Command("stop_notify"))
 async def stop_notify_command(message: types.Message):
     global users
