@@ -58,6 +58,13 @@ def get_user_state(user_id: int):
             "current_index": 0
         }
         save_user_progress(user_progress)
+    else:
+        state = user_progress[str(user_id)]
+        old_quotes = state["shuffled_quotes"]
+        new_quotes = [q for q in QUOTES if q not in old_quotes]
+        if new_quotes:
+            state["shuffled_quotes"].extend(new_quotes)
+            save_user_progress(user_progress)
     return user_progress[str(user_id)]
 
 def get_next_quote_for_user(user_id: int):
