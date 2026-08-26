@@ -243,6 +243,43 @@ async def stop_notify_command(message: types.Message):
     else:
         await message.answer("Ты и так не подписан на уведомления.")
 
+@dp.message(Command("broadcast"))
+async def broadcast_command(message: types.Message):
+    admin_id = 5251304637  # ЗАМЕНИТЕ НА ВАШ ID
+    if message.from_user.id != admin_id:
+        await message.answer("❌ У вас нет прав для этой команды.")
+        return
+    
+    text = message.text.replace("/broadcast", "").strip()
+    if not text:
+        await message.answer("❌ Введите текст для рассылки.\nПример: /broadcast Привет! Новые цитаты!")
+        return
+    
+    if not users:
+        await message.answer("❌ Нет подписчиков для рассылки.")
+        return
+    
+    sent = 0
+    failed = 0
+    
+    for user_id in users:
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text=f"📢 <b>Обновление!</b>\n\n{text}",
+                parse_mode="HTML"
+            )
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logger.error(f"Не удалось отправить {user_id}: {e}")
+    
+    await message.answer(
+        f"✅ Рассылка завершена!\n"
+        f"📨 Отправлено: {sent}\n"
+        f"❌ Не удалось: {failed}"
+    )
+
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     user_id = message.from_user.id
