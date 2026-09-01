@@ -16,12 +16,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Файл для сохранения прогресса ПОЛЬЗОВАТЕЛЕЙ ---
+# --- Файлы ---
 PROGRESS_FILE = "user_progress.json"
-
-# --- Загрузка пользователей (для уведомлений) ---
 USERS_FILE = "users.json"
+FAVORITES_FILE = "favorites.json"
 
+# --- Загрузка пользователей ---
 def load_users():
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
@@ -35,7 +35,7 @@ def save_users(users):
 
 users = load_users()
 
-# --- Загрузка прогресса для всех пользователей ---
+# --- Загрузка прогресса ---
 def load_user_progress():
     try:
         with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
@@ -49,6 +49,21 @@ def save_user_progress(progress):
 
 user_progress = load_user_progress()
 
+# --- Загрузка избранного ---
+def load_favorites():
+    try:
+        with open(FAVORITES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_favorites(favorites):
+    with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
+        json.dump(favorites, f, ensure_ascii=False, indent=2)
+
+favorites = load_favorites()
+
+# --- Работа с прогрессом ---
 def get_user_state(user_id: int):
     if str(user_id) not in user_progress:
         shuffled = QUOTES.copy()
@@ -89,6 +104,25 @@ def reset_progress_for_user(user_id: int):
     }
     save_user_progress(user_progress)
 
+# --- Работа с избранным ---
+def add_favorite(user_id: int, quote: str):
+    user_id = str(user_id)
+    if user_id not in favorites:
+        favorites[user_id] = []
+    if quote not in favorites[user_id]:
+        favorites[user_id].append(quote)
+        save_favorites(favorites)
+        return True
+    return False
+
+def remove_favorite(user_id: int, quote: str):
+    user_id = str(user_id)
+    if user_id in favorites and quote in favorites[user_id]:
+        favorites[user_id].remove(quote)
+        save_favorites(favorites)
+        return True
+    return False
+
 # --- Варианты утренних сообщений ---
 MORNING_MESSAGES = [
     "🌅 Доброе утро! Вот твоя цитата дня:",
@@ -98,12 +132,20 @@ MORNING_MESSAGES = [
     "🍀 Утро добрым не бывает, но цитата его исправит:",
 ]
 
-def get_quote_button():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+# --- КНОПКИ ---
+def get_quote_button(show_favorite: bool = True):
+    if show_favorite:
+        buttons = [
+            [
+                InlineKeyboardButton(text="🎲 Новая", callback_data="get_quote"),
+                InlineKeyboardButton(text="❤️", callback_data="add_favorite")
+            ]
+        ]
+    else:
+        buttons = [
             [InlineKeyboardButton(text="🎲 Новая цитата", callback_data="get_quote")]
         ]
-    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_reset_button():
     return InlineKeyboardMarkup(
@@ -125,6 +167,7 @@ async def set_commands():
         BotCommand(command="start", description="Начать заново"),
         BotCommand(command="quote", description="Получить цитату"),
         BotCommand(command="reset", description="Сбросить прогресс"),
+        BotCommand(command="favorites", description="Избранные цитаты"),
         BotCommand(command="help", description="Помощь"),
     ]
     await bot.set_my_commands(commands)
@@ -164,6 +207,12 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
         )
     except Exception as e:
         logger.error(f"Ошибка при отправке поздравления: {e}")
+        await bot.send_message(
+            chat_id=chat_id,
+            text=caption,
+            parse_mode="HTML",
+            reply_markup=get_reset_button()
+        )
 
 async def send_daily_notification():
     if not users:
@@ -203,6 +252,46 @@ async def daily_task():
         await asyncio.sleep(wait_seconds)
         await send_daily_notification()
 
+# --- ФУНКЦИЯ ПОКАЗА ИЗБРАННОГО (БЕЗ СОРТИРОВКИ, С КНОПКАМИ УДАЛЕНИЯ) ---
+async def show_favorites_page(message: types.Message, user_id: str):
+    fav_list = favorites.get(user_id, [])
+    if not fav_list:
+        await message.answer("📭 У вас пока нет избранных цитат.\n\nЧтобы добавить цитату в избранное, нажмите ❤️ под цитатой.")
+        return
+    
+    text = "⭐ <b>Ваши избранные цитаты:</b>\n\n"
+    keyboard = []
+    
+    for i, quote in enumerate(fav_list, 1):
+        text += f"{i}. {quote}\n"
+        if len(text) > 3500:
+            text += "\n... и ещё несколько цитат"
+            for j in range(i, len(fav_list)):
+                short_quote = fav_list[j][:30] + "..." if len(fav_list[j]) > 30 else fav_list[j]
+                keyboard.append([
+                    InlineKeyboardButton(
+                        text=f"🗑️ {short_quote}",
+                        callback_data=f"remove_fav_{j}"
+                    )
+                ])
+            break
+    
+    if not keyboard:
+        for i, quote in enumerate(fav_list):
+            short_quote = quote[:30] + "..." if len(quote) > 30 else quote
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"🗑️ {short_quote}",
+                    callback_data=f"remove_fav_{i}"
+                )
+            ])
+    
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard) if keyboard else None
+    )
+
 # --- КОМАНДЫ ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
@@ -232,22 +321,24 @@ async def help_command(message: types.Message):
         "/start — начать заново\n"
         "/quote — получить следующую цитату\n"
         "/reset — сбросить прогресс\n"
+        "/favorites — избранные цитаты\n"
         "/help — это сообщение"
     )
     await message.answer(help_text, parse_mode="HTML")
 
+# --- ИЗБРАННОЕ ---
+@dp.message(Command("favorites"))
+async def favorites_command(message: types.Message):
+    user_id = str(message.from_user.id)
+    await show_favorites_page(message, user_id)
+
 # --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ ---
-# В группах — общий прогресс для всей группы
-# В личных чатах — свой прогресс у каждого пользователя
 @dp.message(lambda message: message.text and "цитата" in message.text.lower())
 async def quote_by_keyword(message: types.Message):
-    # Определяем, для кого берём прогресс
     if message.chat.type in ["group", "supergroup"]:
-        # В группе — общий прогресс для всей группы
         chat_id = message.chat.id
         quote = get_next_quote_for_user(chat_id)
     else:
-        # В личном чате — прогресс для пользователя
         user_id = message.from_user.id
         quote = get_next_quote_for_user(user_id)
     
@@ -406,6 +497,44 @@ async def send_random_quote(callback_query: types.CallbackQuery):
             )
         else:
             logger.error(f"Ошибка: {e}")
+
+@dp.callback_query(lambda c: c.data == "add_favorite")
+async def add_favorite_callback(callback_query: types.CallbackQuery):
+    try:
+        user_id = callback_query.from_user.id
+        last_message = callback_query.message
+        if last_message and last_message.text and "📜" in last_message.text:
+            quote = last_message.text.replace("📜", "").strip()
+            if add_favorite(user_id, quote):
+                await callback_query.answer("✅ Добавлено в избранное!", show_alert=True)
+            else:
+                await callback_query.answer("⚠️ Уже есть в избранном", show_alert=True)
+        else:
+            await callback_query.answer("❌ Не найдена цитата", show_alert=True)
+    except Exception as e:
+        logger.error(f"Ошибка добавления в избранное: {e}")
+        await callback_query.answer("❌ Ошибка", show_alert=True)
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("remove_fav_"))
+async def remove_favorite_callback(callback_query: types.CallbackQuery):
+    try:
+        user_id = str(callback_query.from_user.id)
+        index = int(callback_query.data.split("_")[2])
+        
+        if user_id not in favorites or index >= len(favorites[user_id]):
+            await callback_query.answer("❌ Цитата не найдена.", show_alert=True)
+            return
+        
+        favorites[user_id].pop(index)
+        save_favorites(favorites)
+        
+        await callback_query.answer("✅ Цитата удалена из избранного!", show_alert=True)
+        
+        await show_favorites_page(callback_query.message, user_id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка удаления из избранного: {e}")
+        await callback_query.answer("❌ Ошибка при удалении.", show_alert=True)
 
 @dp.callback_query(lambda c: c.data == "reset_progress")
 async def reset_callback(callback_query: types.CallbackQuery):
