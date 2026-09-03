@@ -9,7 +9,6 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, MenuButtonCommands
 from aiohttp import web
 import aiohttp
-import json as json_lib
 
 from quotes import QUOTES
 
@@ -21,6 +20,22 @@ if not BOT_TOKEN:
 # --- Supabase настройки ---
 SUPABASE_URL = "https://foibyfoisadaaobwdmbq.supabase.co"
 SUPABASE_KEY = "sb_publishable_36KIhuPO7H484TorQRuP3g_FDVBWlHj"
+
+# --- ДОСТИЖЕНИЯ В СТИЛЕ СТЭТХЭМА С МЕДАЛЬКАМИ ---
+ACHIEVEMENTS = {
+    10: {"emoji": "🥉", "text": "10 цитат. Так может каждый."},
+    25: {"emoji": "🥉", "text": "25 цитат. Неплохо. Для начала."},
+    50: {"emoji": "🥈", "text": "50 цитат. Мог бы и больше, но и так сойдёт."},
+    100: {"emoji": "🥈", "text": "100 цитат. Теперь ты понимаешь, о чём я."},
+    200: {"emoji": "🥇", "text": "200 цитат. Я бы сказал, что впечатлён, но я не впечатлительный."},
+    300: {"emoji": "🥇", "text": "300 цитат. Ты всё ещё здесь. Упёртый, как баран."},
+    400: {"emoji": "🏅", "text": "400 цитат. Я начинаю уважать твою настойчивость. Начинаю."},
+    500: {"emoji": "🏅", "text": "500 цитат. Половина пути. Или ещё нет. Похуй."},
+    600: {"emoji": "🌟", "text": "600 цитат. Ты серьёзно? Ладно, молодец. Только не говори, что я это сказал."},
+    700: {"emoji": "🌟", "text": "700 цитат. Ты уже почти как я. Но не совсем."},
+    800: {"emoji": "⭐", "text": "800 цитат. Я знаю, ты не остановишься. Упёртый, блин."},
+    900: {"emoji": "👑", "text": "900 цитат. Ещё чуть-чуть и ты меня догонишь. Но не догонишь."},
+}
 
 # --- HTTP функции для работы с Supabase ---
 
@@ -175,12 +190,19 @@ async def get_next_quote_for_user(user_id: int):
     index = state["current_index"]
     
     if index >= len(shuffled):
-        return None
+        return None, None, None
     
+    old_index = index
     quote = shuffled[index]
     state["current_index"] = index + 1
     await save_user_progress_supabase(str(user_id), shuffled, state["current_index"])
-    return quote
+    
+    # Проверяем достижения
+    for threshold, data in ACHIEVEMENTS.items():
+        if old_index < threshold <= state["current_index"]:
+            return quote, threshold, data["emoji"], data["text"]
+    
+    return quote, None, None, None
 
 async def reset_progress_for_user(user_id: int):
     shuffled = QUOTES.copy()
@@ -260,6 +282,7 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
     caption = (
         f"🎉 <b>Поздравляю, {user_name}!</b> 🎉\n\n"
         f"Ты прошёл все <b>{len(QUOTES)}</b> цитат!\n"
+        f"Живи теперь с этим.\n\n"
         f"Нажми на кнопку, чтобы начать новый круг."
     )
     
@@ -300,7 +323,7 @@ async def send_daily_notification():
     for user_id in users:
         try:
             user_id_int = int(user_id)
-            quote = await get_next_quote_for_user(user_id_int)
+            quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id_int)
             morning_text = random.choice(MORNING_MESSAGES)
             
             if quote is None:
@@ -316,6 +339,15 @@ async def send_daily_notification():
                 disable_notification=False
             )
             logger.info(f"Уведомление с цитатой отправлено пользователю {user_id}")
+            
+            # Отправляем достижение, если есть
+            if achievement_text:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
+                         f"Всего прочитано: <b>{threshold}</b> цитат",
+                    parse_mode="HTML"
+                )
             
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление {user_id}: {e}")
@@ -431,19 +463,25 @@ async def save_quote_command(message: types.Message):
 async def quote_by_keyword(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
         chat_id = message.chat.id
-        quote = await get_next_quote_for_user(chat_id)
+        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(chat_id)
+        
+        if quote is None:
+            await send_congratulation(message)
+        else:
+            await message.answer(f"📜 {quote}", disable_notification=True)
+            
+            if achievement_text:
+                await message.answer(
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
+                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    parse_mode="HTML"
+                )
     else:
         user_id = message.from_user.id
-        quote = await get_next_quote_for_user(user_id)
-    
-    if quote is None:
-        await send_congratulation(message)
-    else:
-        if message.chat.type in ["group", "supergroup"]:
-            await message.answer(
-                f"📜 {quote}",
-                disable_notification=True
-            )
+        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
+        
+        if quote is None:
+            await send_congratulation(message)
         else:
             last_quotes[user_id] = quote
             await message.answer(
@@ -451,6 +489,13 @@ async def quote_by_keyword(message: types.Message):
                 reply_markup=get_quote_button(),
                 disable_notification=True
             )
+            
+            if achievement_text:
+                await message.answer(
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
+                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    parse_mode="HTML"
+                )
 
 @dp.message(Command("stop_notify"))
 async def stop_notify_command(message: types.Message):
@@ -499,7 +544,8 @@ async def broadcast_command(message: types.Message):
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     user_id = message.from_user.id
-    quote = await get_next_quote_for_user(user_id)
+    quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
+    
     if quote is None:
         await send_congratulation(message)
     else:
@@ -509,6 +555,13 @@ async def quote_command(message: types.Message):
             reply_markup=get_quote_button(),
             disable_notification=True
         )
+        
+        if achievement_text:
+            await message.answer(
+                f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
+                f"Всего прочитано: <b>{threshold}</b> цитат",
+                parse_mode="HTML"
+            )
 
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
@@ -569,7 +622,7 @@ async def send_congratulation(message: types.Message):
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
         user_id = callback_query.from_user.id
-        quote = await get_next_quote_for_user(user_id)
+        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
         
         if quote is None:
             await send_congratulation(callback_query.message)
@@ -580,6 +633,13 @@ async def send_random_quote(callback_query: types.CallbackQuery):
                 reply_markup=get_quote_button(),
                 disable_notification=True
             )
+            
+            if achievement_text:
+                await callback_query.message.answer(
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
+                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    parse_mode="HTML"
+                )
         
         await callback_query.answer()
         
@@ -617,7 +677,7 @@ async def remove_favorite_callback(callback_query: types.CallbackQuery):
 async def reset_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     await reset_progress_for_user(user_id)
-    first_quote = await get_next_quote_for_user(user_id)
+    first_quote, _, _, _ = await get_next_quote_for_user(user_id)
     
     await callback_query.message.answer(
         f"🔄 <b>Новый круг!</b>\n\n"
