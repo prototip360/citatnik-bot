@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, MenuButtonCommands
 from aiohttp import web
+from supabase import create_client
 
 from quotes import QUOTES
 
@@ -16,74 +17,121 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Файлы ---
-PROGRESS_FILE = "user_progress.json"
-USERS_FILE = "users.json"
-FAVORITES_FILE = "favorites.json"
+# --- Supabase настройки ---
+SUPABASE_URL = "https://foibyfoisadaaobwdmbq.supabase.co"
+SUPABASE_KEY = "sb_publishable_36KIhuPO7H484TorQRuP3g_FDVBWlHj"
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # --- Хранилище последних цитат для каждого пользователя ---
 last_quotes = {}  # {user_id: "цитата"}
 
-# --- Загрузка пользователей ---
-def load_users():
+# --- РАБОТА С SUPABASE ---
+
+def get_user_progress(user_id: str):
     try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set()
+        response = supabase.table("user_progress").select("*").eq("user_id", user_id).execute()
+        if response.data:
+            return response.data[0]
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка загрузки прогресса: {e}")
+        return None
 
-def save_users(users):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(users), f, ensure_ascii=False, indent=2)
-
-users = load_users()
-
-# --- Загрузка прогресса ---
-def load_user_progress():
+def save_user_progress_supabase(user_id: str, shuffled_quotes: list, current_index: int):
     try:
-        with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        existing = supabase.table("user_progress").select("*").eq("user_id", user_id).execute()
+        if existing.data:
+            supabase.table("user_progress").update({
+                "shuffled_quotes": shuffled_quotes,
+                "current_index": current_index
+            }).eq("user_id", user_id).execute()
+        else:
+            supabase.table("user_progress").insert({
+                "user_id": user_id,
+                "shuffled_quotes": shuffled_quotes,
+                "current_index": current_index
+            }).execute()
+        logger.info(f"Прогресс сохранён для {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения прогресса: {e}")
 
-def save_user_progress(progress):
-    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
-        json.dump(progress, f, ensure_ascii=False, indent=2)
-
-user_progress = load_user_progress()
-
-# --- Загрузка избранного ---
-def load_favorites():
+def get_user_favorites(user_id: str):
     try:
-        with open(FAVORITES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        response = supabase.table("favorites").select("*").eq("user_id", user_id).execute()
+        if response.data:
+            return response.data[0].get("quotes", [])
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка загрузки избранного: {e}")
+        return []
 
-def save_favorites(favorites):
-    with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
-        json.dump(favorites, f, ensure_ascii=False, indent=2)
+def save_user_favorites(user_id: str, quotes: list):
+    try:
+        existing = supabase.table("favorites").select("*").eq("user_id", user_id).execute()
+        if existing.data:
+            supabase.table("favorites").update({"quotes": quotes}).eq("user_id", user_id).execute()
+        else:
+            supabase.table("favorites").insert({
+                "user_id": user_id,
+                "quotes": quotes
+            }).execute()
+        logger.info(f"Избранное сохранено для {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения избранного: {e}")
 
-favorites = load_favorites()
+def is_user_exists(user_id: str):
+    try:
+        response = supabase.table("users").select("*").eq("user_id", user_id).execute()
+        return bool(response.data)
+    except Exception as e:
+        logger.error(f"Ошибка проверки пользователя: {e}")
+        return False
+
+def add_user_to_list(user_id: str):
+    try:
+        if not is_user_exists(user_id):
+            supabase.table("users").insert({"user_id": user_id}).execute()
+            logger.info(f"Пользователь {user_id} добавлен в список")
+    except Exception as e:
+        logger.error(f"Ошибка добавления пользователя: {e}")
+
+def get_all_users():
+    try:
+        response = supabase.table("users").select("user_id").execute()
+        return [row["user_id"] for row in response.data]
+    except Exception as e:
+        logger.error(f"Ошибка загрузки пользователей: {e}")
+        return []
+
+def remove_user_from_list(user_id: str):
+    try:
+        supabase.table("users").delete().eq("user_id", user_id).execute()
+        logger.info(f"Пользователь {user_id} удалён из списка")
+    except Exception as e:
+        logger.error(f"Ошибка удаления пользователя: {e}")
 
 # --- Работа с прогрессом ---
 def get_user_state(user_id: int):
-    if str(user_id) not in user_progress:
+    user_id_str = str(user_id)
+    existing = get_user_progress(user_id_str)
+    
+    if not existing:
         shuffled = QUOTES.copy()
         random.shuffle(shuffled)
-        user_progress[str(user_id)] = {
-            "shuffled_quotes": shuffled,
-            "current_index": 0
-        }
-        save_user_progress(user_progress)
+        save_user_progress_supabase(user_id_str, shuffled, 0)
+        return {"shuffled_quotes": shuffled, "current_index": 0}
     else:
-        state = user_progress[str(user_id)]
-        old_quotes = state["shuffled_quotes"]
+        # Проверяем, не появились ли новые цитаты
+        old_quotes = existing.get("shuffled_quotes", [])
         new_quotes = [q for q in QUOTES if q not in old_quotes]
         if new_quotes:
-            state["shuffled_quotes"].extend(new_quotes)
-            save_user_progress(user_progress)
-    return user_progress[str(user_id)]
+            old_quotes.extend(new_quotes)
+            save_user_progress_supabase(user_id_str, old_quotes, existing.get("current_index", 0))
+            return {"shuffled_quotes": old_quotes, "current_index": existing.get("current_index", 0)}
+        return {
+            "shuffled_quotes": existing.get("shuffled_quotes", []),
+            "current_index": existing.get("current_index", 0)
+        }
 
 def get_next_quote_for_user(user_id: int):
     state = get_user_state(user_id)
@@ -95,34 +143,30 @@ def get_next_quote_for_user(user_id: int):
     
     quote = shuffled[index]
     state["current_index"] = index + 1
-    save_user_progress(user_progress)
+    save_user_progress_supabase(str(user_id), shuffled, state["current_index"])
     return quote
 
 def reset_progress_for_user(user_id: int):
     shuffled = QUOTES.copy()
     random.shuffle(shuffled)
-    user_progress[str(user_id)] = {
-        "shuffled_quotes": shuffled,
-        "current_index": 0
-    }
-    save_user_progress(user_progress)
+    save_user_progress_supabase(str(user_id), shuffled, 0)
 
 # --- Работа с избранным ---
 def add_favorite(user_id: int, quote: str):
-    user_id = str(user_id)
-    if user_id not in favorites:
-        favorites[user_id] = []
-    if quote not in favorites[user_id]:
-        favorites[user_id].append(quote)
-        save_favorites(favorites)
+    user_id_str = str(user_id)
+    favorites = get_user_favorites(user_id_str)
+    if quote not in favorites:
+        favorites.append(quote)
+        save_user_favorites(user_id_str, favorites)
         return True
     return False
 
 def remove_favorite(user_id: int, quote: str):
-    user_id = str(user_id)
-    if user_id in favorites and quote in favorites[user_id]:
-        favorites[user_id].remove(quote)
-        save_favorites(favorites)
+    user_id_str = str(user_id)
+    favorites = get_user_favorites(user_id_str)
+    if quote in favorites:
+        favorites.remove(quote)
+        save_user_favorites(user_id_str, favorites)
         return True
     return False
 
@@ -135,7 +179,7 @@ MORNING_MESSAGES = [
     "🍀 Утро добрым не бывает, но цитата его исправит:",
 ]
 
-# --- КНОПКИ (без кнопки "В избранное") ---
+# --- КНОПКИ ---
 def get_quote_button():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -212,20 +256,22 @@ async def send_congratulation_to_user(user_id: int, chat_id: int):
         )
 
 async def send_daily_notification():
+    users = get_all_users()
     if not users:
         logger.info("Нет пользователей для уведомления")
         return
     
     for user_id in users:
         try:
-            quote = get_next_quote_for_user(user_id)
+            user_id_int = int(user_id)
+            quote = get_next_quote_for_user(user_id_int)
             morning_text = random.choice(MORNING_MESSAGES)
             
             if quote is None:
-                await send_congratulation_to_user(user_id, user_id)
+                await send_congratulation_to_user(user_id_int, user_id_int)
                 continue
             
-            last_quotes[user_id] = quote
+            last_quotes[user_id_int] = quote
             await bot.send_message(
                 chat_id=user_id,
                 text=f"{morning_text}\n\n📜 {quote}",
@@ -252,7 +298,7 @@ async def daily_task():
 
 # --- ФУНКЦИЯ ПОКАЗА ИЗБРАННОГО ---
 async def show_favorites_page(message: types.Message, user_id: str):
-    fav_list = favorites.get(user_id, [])
+    fav_list = get_user_favorites(user_id)
     if not fav_list:
         await message.answer("📭 У вас пока нет избранных цитат.\n\nЧтобы сохранить цитату, получите её, а затем напишите /save")
         return
@@ -293,12 +339,10 @@ async def show_favorites_page(message: types.Message, user_id: str):
 # --- КОМАНДЫ ---
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
-    global users
-    user_id = message.from_user.id
-    users.add(user_id)
-    save_users(users)
+    user_id = str(message.from_user.id)
+    add_user_to_list(user_id)
     
-    reset_progress_for_user(user_id)
+    reset_progress_for_user(int(user_id))
     await message.answer(
         "📖 <b>Привет! Я бот-цитатник</b>\n\n"
         "Нажми на кнопку ниже — я пришлю тебе случайную цитату!\n"
@@ -365,7 +409,6 @@ async def quote_by_keyword(message: types.Message):
                 disable_notification=True
             )
         else:
-            user_id = message.from_user.id
             last_quotes[user_id] = quote
             await message.answer(
                 f"📜 {quote}",
@@ -375,14 +418,9 @@ async def quote_by_keyword(message: types.Message):
 
 @dp.message(Command("stop_notify"))
 async def stop_notify_command(message: types.Message):
-    global users
-    user_id = message.from_user.id
-    if user_id in users:
-        users.remove(user_id)
-        save_users(users)
-        await message.answer("❌ Ты отписался от ежедневных уведомлений.")
-    else:
-        await message.answer("Ты и так не подписан на уведомления.")
+    user_id = str(message.from_user.id)
+    remove_user_from_list(user_id)
+    await message.answer("❌ Ты отписался от ежедневных уведомлений.")
 
 @dp.message(Command("broadcast"))
 async def broadcast_command(message: types.Message):
@@ -396,6 +434,7 @@ async def broadcast_command(message: types.Message):
         await message.answer("❌ Введите текст для рассылки.\nПример: /broadcast Привет! Новые цитаты!")
         return
     
+    users = get_all_users()
     if not users:
         await message.answer("❌ Нет подписчиков для рассылки.")
         return
@@ -521,17 +560,18 @@ async def remove_favorite_callback(callback_query: types.CallbackQuery):
     try:
         user_id = str(callback_query.from_user.id)
         index = int(callback_query.data.split("_")[2])
+        fav_list = get_user_favorites(user_id)
         
-        if user_id not in favorites or index >= len(favorites[user_id]):
+        if index >= len(fav_list):
             await callback_query.answer("❌ Цитата не найдена.", show_alert=True)
             return
         
-        favorites[user_id].pop(index)
-        save_favorites(favorites)
-        
-        await callback_query.answer("✅ Цитата удалена из избранного!", show_alert=True)
-        
-        await show_favorites_page(callback_query.message, user_id)
+        quote = fav_list[index]
+        if remove_favorite(int(user_id), quote):
+            await callback_query.answer("✅ Цитата удалена из избранного!", show_alert=True)
+            await show_favorites_page(callback_query.message, user_id)
+        else:
+            await callback_query.answer("❌ Ошибка при удалении.", show_alert=True)
         
     except Exception as e:
         logger.error(f"Ошибка удаления из избранного: {e}")
@@ -576,7 +616,6 @@ async def main():
     
     logger.info("✅ Бот-цитатник запущен!")
     logger.info(f"✅ Загружено {len(QUOTES)} цитат")
-    logger.info(f"✅ Подписчиков на уведомления: {len(users)}")
     
     await polling_task
 
