@@ -558,11 +558,10 @@ async def quote_command(message: types.Message):
         
         if achievement_text:
             await message.answer(
-                f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
-                f"Всего прочитано: <b>{threshold}</b> цитат",
-                parse_mode="HTML"
-            )
-
+    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+    parse_mode="HTML"
+)
+            
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
     user_id = message.from_user.id
