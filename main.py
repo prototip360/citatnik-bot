@@ -197,7 +197,6 @@ async def get_next_quote_for_user(user_id: int):
     state["current_index"] = index + 1
     await save_user_progress_supabase(str(user_id), shuffled, state["current_index"])
     
-    # Проверяем достижения
     for threshold, data in ACHIEVEMENTS.items():
         if old_index < threshold <= state["current_index"]:
             return quote, threshold, data["emoji"], data["text"]
@@ -340,13 +339,12 @@ async def send_daily_notification():
             )
             logger.info(f"Уведомление с цитатой отправлено пользователю {user_id}")
             
-            # Отправляем достижение, если есть
             if achievement_text:
-    await bot.send_message(
-        chat_id=user_id,
-        text=f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-        parse_mode="HTML"
-    )
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+                    parse_mode="HTML"
+                )
             
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление {user_id}: {e}")
@@ -471,8 +469,7 @@ async def quote_by_keyword(message: types.Message):
             
             if achievement_text:
                 await message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
-                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
                     parse_mode="HTML"
                 )
     else:
@@ -491,8 +488,7 @@ async def quote_by_keyword(message: types.Message):
             
             if achievement_text:
                 await message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
-                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
                     parse_mode="HTML"
                 )
 
@@ -557,10 +553,10 @@ async def quote_command(message: types.Message):
         
         if achievement_text:
             await message.answer(
-    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-    parse_mode="HTML"
-)
-            
+                f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+                parse_mode="HTML"
+            )
+
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
     user_id = message.from_user.id
@@ -634,8 +630,7 @@ async def send_random_quote(callback_query: types.CallbackQuery):
             
             if achievement_text:
                 await callback_query.message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
-                    f"Всего прочитано: <b>{threshold}</b> цитат",
+                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
                     parse_mode="HTML"
                 )
         
