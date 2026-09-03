@@ -342,12 +342,11 @@ async def send_daily_notification():
             
             # Отправляем достижение, если есть
             if achievement_text:
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=f"{emoji} <b>Достижение!</b>\n\n{achievement_text}\n\n"
-                         f"Всего прочитано: <b>{threshold}</b> цитат",
-                    parse_mode="HTML"
-                )
+    await bot.send_message(
+        chat_id=user_id,
+        text=f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+        parse_mode="HTML"
+    )
             
         except Exception as e:
             logger.error(f"Не удалось отправить уведомление {user_id}: {e}")
