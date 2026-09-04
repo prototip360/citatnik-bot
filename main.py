@@ -168,31 +168,139 @@ async def get_premium_status(user_id: int):
 # --- Хранилище последних цитат и времени ---
 last_quotes = {}
 last_request_time = {}  # {user_id: datetime}
+pending_requests = {}   # {user_id: asyncio.Task}
 
 # --- ЗАДЕРЖКА МЕЖДУ ЦИТАТАМИ (10 секунд для бесплатных) ---
-async def check_delay(user_id: int, message: types.Message) -> bool:
-    """Проверяет, прошло ли 10 секунд с последнего запроса"""
-    if message.chat.type in ["group", "supergroup"]:
-        return True  # В группах задержки нет
-    
+async def process_quote_request(user_id: int, message: types.Message, is_callback: bool = False):
+    """Обрабатывает запрос цитаты с задержкой"""
     # Проверяем премиум-статус
     is_premium = await get_premium_status(user_id)
-    if is_premium:
-        return True  # Премиум-пользователям без задержки
     
+    # Если премиум — сразу выдаём цитату
+    if is_premium:
+        await send_quote(user_id, message, is_callback)
+        return
+    
+    # Проверяем, не было ли уже запроса от этого пользователя
+    if user_id in pending_requests and not pending_requests[user_id].done():
+        await message.answer("⏳ Уже идёт загрузка... Подожди!")
+        return
+    
+    # Проверяем, прошло ли 10 секунд с последнего запроса
     now = datetime.now()
     if user_id in last_request_time:
         elapsed = (now - last_request_time[user_id]).total_seconds()
         if elapsed < 10:
             wait_time = 10 - int(elapsed)
-            await message.answer(
-                f"⏳ Подожди ещё {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
+            # Создаём задачу на отправку после задержки
+            task = asyncio.create_task(
+                delayed_quote(user_id, message, is_callback, wait_time)
             )
-            return False
+            pending_requests[user_id] = task
+            return
     
-    # Обновляем время запроса
+    # Если прошло 10 секунд — сразу отправляем
     last_request_time[user_id] = now
-    return True
+    await send_quote(user_id, message, is_callback)
+
+async def delayed_quote(user_id: int, message: types.Message, is_callback: bool, wait_time: int):
+    """Отправляет цитату после задержки"""
+    try:
+        # Отправляем сообщение о задержке
+        wait_msg = await message.answer(
+            f"⏳ Подожди {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
+        )
+        
+        # Ждём указанное время
+        await asyncio.sleep(wait_time)
+        
+        # Удаляем сообщение о задержке
+        await wait_msg.delete()
+        
+        # Обновляем время последнего запроса
+        last_request_time[user_id] = datetime.now()
+        
+        # Отправляем цитату
+        await send_quote(user_id, message, is_callback)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в delayed_quote: {e}")
+    finally:
+        # Удаляем задачу из списка ожидающих
+        if user_id in pending_requests:
+            del pending_requests[user_id]
+
+async def send_quote(user_id: int, message: types.Message, is_callback: bool = False):
+    """Отправляет цитату пользователю"""
+    quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
+    
+    if quote is None:
+        await send_congratulation(message)
+        return
+    
+    last_quotes[user_id] = quote
+    
+    if is_callback:
+        await message.answer(
+            f"📜 {quote}",
+            reply_markup=get_quote_button(),
+            disable_notification=True
+        )
+    else:
+        await message.answer(
+            f"📜 {quote}",
+            reply_markup=get_quote_button(),
+            disable_notification=True
+        )
+    
+    if achievement_text:
+        await message.answer(
+            f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+            parse_mode="HTML"
+        )
+
+# --- Варианты утренних сообщений ---
+MORNING_MESSAGES = [
+    "🌅 Доброе утро! Вот твоя цитата дня:",
+    "📖 Новый день — новая цитата:",
+    "☀️ Отличное утро! Лови вдохновение:",
+    "🌟 Доброе утро! Твоя цитата:",
+    "🍀 Утро добрым не бывает, но цитата его исправит:",
+]
+
+# --- КНОПКИ ---
+def get_quote_button():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Новая цитата", callback_data="get_quote")]
+        ]
+    )
+
+def get_reset_button():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Начать заново", callback_data="reset_progress")]
+        ]
+    )
+
+# --- Логирование ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# --- Установка меню команд ---
+async def set_commands():
+    commands = [
+        BotCommand(command="start", description="Начать заново"),
+        BotCommand(command="quote", description="Получить цитату"),
+        BotCommand(command="reset", description="Сбросить прогресс"),
+        BotCommand(command="premium", description="Купить премиум (30 Stars)"),
+        BotCommand(command="status", description="Проверить статус"),
+        BotCommand(command="help", description="Помощь"),
+    ]
+    await bot.set_my_commands(commands)
 
 # --- Работа с прогрессом ---
 async def get_user_state(user_id: int):
@@ -258,49 +366,6 @@ async def remove_favorite(user_id: int, quote: str):
         await save_user_favorites(user_id_str, favorites)
         return True
     return False
-
-# --- Варианты утренних сообщений ---
-MORNING_MESSAGES = [
-    "🌅 Доброе утро! Вот твоя цитата дня:",
-    "📖 Новый день — новая цитата:",
-    "☀️ Отличное утро! Лови вдохновение:",
-    "🌟 Доброе утро! Твоя цитата:",
-    "🍀 Утро добрым не бывает, но цитата его исправит:",
-]
-
-# --- КНОПКИ ---
-def get_quote_button():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Новая цитата", callback_data="get_quote")]
-        ]
-    )
-
-def get_reset_button():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Начать заново", callback_data="reset_progress")]
-        ]
-    )
-
-# --- Логирование ---
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-# --- Установка меню команд ---
-async def set_commands():
-    commands = [
-        BotCommand(command="start", description="Начать заново"),
-        BotCommand(command="quote", description="Получить цитату"),
-        BotCommand(command="reset", description="Сбросить прогресс"),
-        BotCommand(command="premium", description="Купить премиум (30 Stars)"),
-        BotCommand(command="status", description="Проверить статус"),
-        BotCommand(command="help", description="Помощь"),
-    ]
-    await bot.set_my_commands(commands)
 
 # --- ЕЖЕДНЕВНОЕ УВЕДОМЛЕНИЕ ---
 async def send_congratulation_to_user(user_id: int, chat_id: int):
@@ -593,28 +658,7 @@ async def quote_by_keyword(message: types.Message):
                 )
     else:
         user_id = message.from_user.id
-        
-        # Проверяем задержку (между цитатами)
-        if not await check_delay(user_id, message):
-            return
-        
-        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
-        
-        if quote is None:
-            await send_congratulation(message)
-        else:
-            last_quotes[user_id] = quote
-            await message.answer(
-                f"📜 {quote}",
-                reply_markup=get_quote_button(),
-                disable_notification=True
-            )
-            
-            if achievement_text:
-                await message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-                    parse_mode="HTML"
-                )
+        await process_quote_request(user_id, message, is_callback=False)
 
 @dp.message(Command("stop_notify"))
 async def stop_notify_command(message: types.Message):
@@ -663,28 +707,7 @@ async def broadcast_command(message: types.Message):
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     user_id = message.from_user.id
-    
-    # Проверяем задержку (между цитатами)
-    if not await check_delay(user_id, message):
-        return
-    
-    quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
-    
-    if quote is None:
-        await send_congratulation(message)
-    else:
-        last_quotes[user_id] = quote
-        await message.answer(
-            f"📜 {quote}",
-            reply_markup=get_quote_button(),
-            disable_notification=True
-        )
-        
-        if achievement_text:
-            await message.answer(
-                f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-                parse_mode="HTML"
-            )
+    await process_quote_request(user_id, message, is_callback=False)
 
 @dp.message(Command("reset"))
 async def reset_command(message: types.Message):
@@ -745,30 +768,7 @@ async def send_congratulation(message: types.Message):
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
         user_id = callback_query.from_user.id
-        
-        # Проверяем задержку (между цитатами)
-        if not await check_delay(user_id, callback_query.message):
-            await callback_query.answer()
-            return
-        
-        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
-        
-        if quote is None:
-            await send_congratulation(callback_query.message)
-        else:
-            last_quotes[user_id] = quote
-            await callback_query.message.answer(
-                f"📜 {quote}",
-                reply_markup=get_quote_button(),
-                disable_notification=True
-            )
-            
-            if achievement_text:
-                await callback_query.message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-                    parse_mode="HTML"
-                )
-        
+        await process_quote_request(user_id, callback_query.message, is_callback=True)
         await callback_query.answer()
         
     except Exception as e:
@@ -778,6 +778,7 @@ async def send_random_quote(callback_query: types.CallbackQuery):
             )
         else:
             logger.error(f"Ошибка: {e}")
+            await callback_query.answer()
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("remove_fav_"))
 async def remove_favorite_callback(callback_query: types.CallbackQuery):
