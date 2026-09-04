@@ -185,12 +185,9 @@ async def check_delay(user_id: int, message: types.Message) -> bool:
         elapsed = (now - last_request_time[user_id]).total_seconds()
         if elapsed < 10:
             wait_time = 10 - int(elapsed)
-            wait_msg = await message.answer(
+            await message.answer(
                 f"⏳ Подожди ещё {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
             )
-            # Удаляем сообщение через wait_time + 0.5 секунд
-            await asyncio.sleep(wait_time + 0.5)
-            await wait_msg.delete()
             return False
     
     # Обновляем время запроса
@@ -581,6 +578,7 @@ async def favorites_command(message: types.Message):
 @dp.message(lambda message: message.text and "цитата" in message.text.lower())
 async def quote_by_keyword(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
+        # В группах используем chat_id
         chat_id = message.chat.id
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(chat_id)
         
@@ -595,6 +593,7 @@ async def quote_by_keyword(message: types.Message):
                     parse_mode="HTML"
                 )
     else:
+        # В личных чатах используем user_id
         user_id = message.from_user.id
         
         # Проверяем задержку (между цитатами)
