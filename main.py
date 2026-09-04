@@ -185,9 +185,12 @@ async def check_delay(user_id: int, message: types.Message) -> bool:
         elapsed = (now - last_request_time[user_id]).total_seconds()
         if elapsed < 10:
             wait_time = 10 - int(elapsed)
-            await message.answer(
+            wait_msg = await message.answer(
                 f"⏳ Подожди ещё {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
             )
+            # Удаляем сообщение через wait_time + 0.5 секунд
+            await asyncio.sleep(wait_time + 0.5)
+            await wait_msg.delete()
             return False
     
     # Обновляем время запроса
