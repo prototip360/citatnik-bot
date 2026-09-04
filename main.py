@@ -150,7 +150,7 @@ async def is_user_exists(user_id: str):
 
 async def add_user_to_list(user_id: str):
     if not await is_user_exists(user_id):
-        await supabase_insert("users", {"user_id": user_id})
+        await supabase_insert("users", {"user_id": user_id, "is_premium": False})
 
 async def get_all_users():
     data = await supabase_get("users")
@@ -165,8 +165,34 @@ async def get_premium_status(user_id: int):
         return user_data[0].get("is_premium", False)
     return False
 
-# --- Хранилище последних цитат ---
+# --- Хранилище последних цитат и времени ---
 last_quotes = {}
+last_request_time = {}  # {user_id: datetime}
+
+# --- ЗАДЕРЖКА МЕЖДУ ЦИТАТАМИ (10 секунд для бесплатных) ---
+async def check_delay(user_id: int, message: types.Message) -> bool:
+    """Проверяет, прошло ли 10 секунд с последнего запроса"""
+    if message.chat.type in ["group", "supergroup"]:
+        return True  # В группах задержки нет
+    
+    # Проверяем премиум-статус
+    is_premium = await get_premium_status(user_id)
+    if is_premium:
+        return True  # Премиум-пользователям без задержки
+    
+    now = datetime.now()
+    if user_id in last_request_time:
+        elapsed = (now - last_request_time[user_id]).total_seconds()
+        if elapsed < 10:
+            wait_time = 10 - int(elapsed)
+            await message.answer(
+                f"⏳ Подожди ещё {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
+            )
+            return False
+    
+    # Обновляем время запроса
+    last_request_time[user_id] = now
+    return True
 
 # --- Работа с прогрессом ---
 async def get_user_state(user_id: int):
@@ -232,20 +258,6 @@ async def remove_favorite(user_id: int, quote: str):
         await save_user_favorites(user_id_str, favorites)
         return True
     return False
-
-# --- ЗАДЕРЖКА ДЛЯ БЕСПЛАТНЫХ ПОЛЬЗОВАТЕЛЕЙ ---
-async def apply_delay(user_id: int, message: types.Message):
-    """Применяет задержку 10 секунд для бесплатных пользователей в личных чатах"""
-    if message.chat.type in ["group", "supergroup"]:
-        return
-    
-    is_premium = await get_premium_status(user_id)
-    if not is_premium:
-        wait_msg = await message.answer(
-            "⏳ Подожди 10 секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
-        )
-        await asyncio.sleep(10)
-        await wait_msg.delete()
 
 # --- Варианты утренних сообщений ---
 MORNING_MESSAGES = [
@@ -488,7 +500,6 @@ async def successful_payment(message: types.Message):
         payload = message.successful_payment.invoice_payload
         
         if payload == "premium_forever":
-            # Начисляем премиум-статус
             user_id_str = str(user_id)
             existing = await supabase_get("users", user_id_str)
             if existing:
@@ -498,7 +509,13 @@ async def successful_payment(message: types.Message):
                     "user_id": user_id_str,
                     "is_premium": True
                 })
-            await message.answer("🎉 Поздравляю! Премиум-доступ активирован навсегда!\n\nТеперь ты можешь пользоваться избранным и читать цитаты без задержек! 🚀")
+            await message.answer(
+                "🎉 Поздравляю! Премиум-доступ активирован навсегда!\n\n"
+                "✅ Безлимитные цитаты\n"
+                "✅ Без задержек\n"
+                "✅ Избранное доступно\n\n"
+                "Спасибо, что поддерживаешь бота! 🙌"
+            )
 
 # --- СТАТУС ---
 @dp.message(Command("status"))
@@ -507,7 +524,15 @@ async def check_status(message: types.Message):
     is_premium = await get_premium_status(user_id)
     
     if is_premium:
-        await message.answer("🎖 <b>У вас есть премиум-доступ!</b>\n\n✅ Безлимитные цитаты\n✅ Без задержек\n✅ Избранное доступно\n\nСпасибо, что поддерживаешь бота! 🙌", parse_mode="HTML")
+        await message.answer(
+            "🎖 <b>У вас есть премиум-доступ!</b>\n\n"
+            "✅ Безлимитные цитаты\n"
+            "✅ Без задержек\n"
+            "✅ Избранное доступно\n"
+            "⏳ Действует <b>навсегда</b>\n\n"
+            "Спасибо, что поддерживаешь бота! 🙌",
+            parse_mode="HTML"
+        )
     else:
         await message.answer(
             "🔓 <b>У вас бесплатный доступ</b>\n\n"
@@ -523,7 +548,6 @@ async def check_status(message: types.Message):
 async def save_quote_command(message: types.Message):
     user_id = message.from_user.id
     
-    # Проверяем премиум-статус
     is_premium = await get_premium_status(user_id)
     if not is_premium:
         await message.answer(
@@ -570,8 +594,9 @@ async def quote_by_keyword(message: types.Message):
     else:
         user_id = message.from_user.id
         
-        # Применяем задержку для бесплатных
-        await apply_delay(user_id, message)
+        # Проверяем задержку (между цитатами)
+        if not await check_delay(user_id, message):
+            return
         
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
         
@@ -639,8 +664,9 @@ async def broadcast_command(message: types.Message):
 async def quote_command(message: types.Message):
     user_id = message.from_user.id
     
-    # Применяем задержку для бесплатных
-    await apply_delay(user_id, message)
+    # Проверяем задержку (между цитатами)
+    if not await check_delay(user_id, message):
+        return
     
     quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
     
@@ -720,8 +746,10 @@ async def send_random_quote(callback_query: types.CallbackQuery):
     try:
         user_id = callback_query.from_user.id
         
-        # Применяем задержку для бесплатных
-        await apply_delay(user_id, callback_query.message)
+        # Проверяем задержку (между цитатами)
+        if not await check_delay(user_id, callback_query.message):
+            await callback_query.answer()
+            return
         
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
         
@@ -758,7 +786,6 @@ async def remove_favorite_callback(callback_query: types.CallbackQuery):
         index = int(callback_query.data.split("_")[2])
         fav_list = await get_user_favorites(user_id)
         
-        # Проверяем премиум-статус
         is_premium = await get_premium_status(int(user_id))
         if not is_premium:
             await callback_query.answer("🔒 Только для премиум!", show_alert=True)
