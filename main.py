@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, MenuButtonCommands
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BotCommand, MenuButtonCommands, LabeledPrice, PreCheckoutQuery, SuccessfulPayment
 from aiohttp import web
 import aiohttp
 
@@ -37,7 +37,7 @@ ACHIEVEMENTS = {
     900: {"emoji": "👑", "text": "900 цитат. Ещё чуть-чуть и ты меня догонишь. Но не догонишь."},
 }
 
-# --- HTTP функции для работы с Supabase ---
+# --- HTTP функции для Supabase ---
 
 async def supabase_get(table: str, user_id: str = None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
@@ -110,7 +110,7 @@ async def supabase_delete(table: str, user_id: str):
             logging.error(f"Ошибка DELETE {table}: {e}")
             return False
 
-# --- РАБОТА С ДАННЫМИ (Supabase) ---
+# --- РАБОТА С ДАННЫМИ ---
 
 async def get_user_progress(user_id: str):
     data = await supabase_get("user_progress", user_id)
@@ -150,7 +150,7 @@ async def is_user_exists(user_id: str):
 
 async def add_user_to_list(user_id: str):
     if not await is_user_exists(user_id):
-        await supabase_insert("users", {"user_id": user_id})
+        await supabase_insert("users", {"user_id": user_id, "is_premium": False})
 
 async def get_all_users():
     data = await supabase_get("users")
@@ -159,8 +159,37 @@ async def get_all_users():
 async def remove_user_from_list(user_id: str):
     await supabase_delete("users", user_id)
 
-# --- Хранилище последних цитат ---
+async def get_premium_status(user_id: int):
+    user_data = await supabase_get("users", str(user_id))
+    if user_data:
+        return user_data[0].get("is_premium", False)
+    return False
+
+# --- Хранилище ---
 last_quotes = {}
+last_request_time = {}
+
+async def check_delay(user_id: int, message: types.Message) -> bool:
+    """Проверяет задержку 10 секунд между цитатами"""
+    if message.chat.type in ["group", "supergroup"]:
+        return True
+    
+    is_premium = await get_premium_status(user_id)
+    if is_premium:
+        return True
+    
+    now = datetime.now()
+    if user_id in last_request_time:
+        elapsed = (now - last_request_time[user_id]).total_seconds()
+        if elapsed < 10:
+            wait_time = 10 - int(elapsed)
+            await message.answer(
+                f"⏳ Подожди ещё {wait_time} секунд... (купи премиум за 30 Stars, чтобы убрать задержку!)"
+            )
+            return False
+    
+    last_request_time[user_id] = now
+    return True
 
 # --- Работа с прогрессом ---
 async def get_user_state(user_id: int):
@@ -264,8 +293,8 @@ async def set_commands():
         BotCommand(command="start", description="Начать заново"),
         BotCommand(command="quote", description="Получить цитату"),
         BotCommand(command="reset", description="Сбросить прогресс"),
-        BotCommand(command="favorites", description="Избранные цитаты"),
-        BotCommand(command="save", description="Сохранить последнюю цитату"),
+        BotCommand(command="premium", description="Купить премиум (30 Stars)"),
+        BotCommand(command="status", description="Проверить статус"),
         BotCommand(command="help", description="Помощь"),
     ]
     await bot.set_my_commands(commands)
@@ -363,6 +392,16 @@ async def daily_task():
 
 # --- ФУНКЦИЯ ПОКАЗА ИЗБРАННОГО ---
 async def show_favorites_page(message: types.Message, user_id: str):
+    is_premium = await get_premium_status(int(user_id))
+    if not is_premium:
+        await message.answer(
+            "🔒 <b>Избранное доступно только с премиумом!</b>\n\n"
+            "Купи премиум за 30 Stars, чтобы сохранять и просматривать цитаты.\n"
+            "Отправь /premium — и получи доступ навсегда!",
+            parse_mode="HTML"
+        )
+        return
+    
     fav_list = await get_user_favorites(user_id)
     if not fav_list:
         await message.answer("📭 У вас пока нет избранных цитат.\n\nЧтобы сохранить цитату, получите её, а затем напишите /save")
@@ -414,9 +453,7 @@ async def start_command(message: types.Message):
         f"Всего цитат: <b>{len(QUOTES)}</b>\n\n"
         "🌅 Каждое утро я буду присылать тебе цитату дня!\n"
         "Команды: /help — список всех команд\n\n"
-        "📢 <b>Новинка!</b>\n"
-        "Теперь меня можно добавить в любую группу.\n"
-        "Просто напиши в чате <b>цитата</b> — и я отвечу!",
+        "⭐ Купи премиум за 30 Stars — и получи доступ к избранному и убирай задержку! /premium",
         parse_mode="HTML",
         reply_markup=get_quote_button()
     )
@@ -428,23 +465,95 @@ async def help_command(message: types.Message):
         "/start — начать заново\n"
         "/quote — получить следующую цитату\n"
         "/reset — сбросить прогресс\n"
-        "/favorites — избранные цитаты\n"
-        "/save — сохранить последнюю цитату\n"
+        "/premium — купить премиум (30 Stars)\n"
+        "/status — проверить статус\n"
         "/help — это сообщение"
     )
     await message.answer(help_text, parse_mode="HTML")
 
-# --- ИЗБРАННОЕ ---
-@dp.message(Command("favorites"))
-async def favorites_command(message: types.Message):
-    user_id = str(message.from_user.id)
-    await show_favorites_page(message, user_id)
+# --- ПРЕМИУМ ---
+@dp.message(Command("premium"))
+async def buy_premium(message: types.Message):
+    await bot.send_invoice(
+        chat_id=message.chat.id,
+        title="🎖 Премиум-доступ к цитатнику",
+        description="Неограниченные цитаты, эксклюзивные подборки и безлимитное избранное — навсегда! 🔥",
+        payload="premium_forever",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="⭐ 30 Stars", amount=30)],
+        start_parameter="premium"
+    )
+
+@dp.pre_checkout_query()
+async def pre_checkout_query(pre_checkout: PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
+
+@dp.message()
+async def successful_payment(message: types.Message):
+    if message.successful_payment:
+        user_id = message.from_user.id
+        payload = message.successful_payment.invoice_payload
+        
+        if payload == "premium_forever":
+            user_id_str = str(user_id)
+            existing = await supabase_get("users", user_id_str)
+            if existing:
+                await supabase_update("users", user_id_str, {"is_premium": True})
+            else:
+                await supabase_insert("users", {
+                    "user_id": user_id_str,
+                    "is_premium": True
+                })
+            await message.answer(
+                "🎉 Поздравляю! Премиум-доступ активирован навсегда!\n\n"
+                "✅ Безлимитные цитаты\n"
+                "✅ Без задержек\n"
+                "✅ Избранное доступно\n\n"
+                "Спасибо, что поддерживаешь бота! 🙌"
+            )
+
+# --- СТАТУС ---
+@dp.message(Command("status"))
+async def check_status(message: types.Message):
+    user_id = message.from_user.id
+    is_premium = await get_premium_status(user_id)
+    
+    if is_premium:
+        await message.answer(
+            "🎖 <b>У вас есть премиум-доступ!</b>\n\n"
+            "✅ Безлимитные цитаты\n"
+            "✅ Без задержек\n"
+            "✅ Избранное доступно\n"
+            "⏳ Действует <b>навсегда</b>\n\n"
+            "Спасибо, что поддерживаешь бота! 🙌",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "🔓 <b>У вас бесплатный доступ</b>\n\n"
+            "⏳ Задержка 10 секунд между цитатами\n"
+            "🔒 Избранное заблокировано\n\n"
+            "Отправь /premium и купи премиум за 30 Stars! ⭐",
+            parse_mode="HTML"
+        )
 
 # --- СОХРАНЕНИЕ ПОСЛЕДНЕЙ ЦИТАТЫ ---
 @dp.message(Command("save"))
 @dp.message(Command("сохранить"))
 async def save_quote_command(message: types.Message):
     user_id = message.from_user.id
+    
+    is_premium = await get_premium_status(user_id)
+    if not is_premium:
+        await message.answer(
+            "🔒 <b>Избранное доступно только с премиумом!</b>\n\n"
+            "Купи премиум за 30 Stars, чтобы сохранять цитаты.\n"
+            "Отправь /premium — и получи доступ навсегда!",
+            parse_mode="HTML"
+        )
+        return
+    
     if user_id not in last_quotes:
         await message.answer("❌ У вас нет последней цитаты для сохранения.\nСначала получите цитату!")
         return
@@ -455,7 +564,13 @@ async def save_quote_command(message: types.Message):
     else:
         await message.answer("⚠️ Цитата уже есть в избранном.")
 
-# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ ---
+# --- ИЗБРАННОЕ ---
+@dp.message(Command("favorites"))
+async def favorites_command(message: types.Message):
+    user_id = str(message.from_user.id)
+    await show_favorites_page(message, user_id)
+
+# --- ОБРАБОТКА СЛОВА "ЦИТАТА" ---
 @dp.message(lambda message: message.text and "цитата" in message.text.lower())
 async def quote_by_keyword(message: types.Message):
     if message.chat.type in ["group", "supergroup"]:
@@ -474,6 +589,10 @@ async def quote_by_keyword(message: types.Message):
                 )
     else:
         user_id = message.from_user.id
+        
+        if not await check_delay(user_id, message):
+            return
+        
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
         
         if quote is None:
@@ -539,6 +658,10 @@ async def broadcast_command(message: types.Message):
 @dp.message(Command("quote"))
 async def quote_command(message: types.Message):
     user_id = message.from_user.id
+    
+    if not await check_delay(user_id, message):
+        return
+    
     quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
     
     if quote is None:
@@ -616,6 +739,11 @@ async def send_congratulation(message: types.Message):
 async def send_random_quote(callback_query: types.CallbackQuery):
     try:
         user_id = callback_query.from_user.id
+        
+        if not await check_delay(user_id, callback_query.message):
+            await callback_query.answer()
+            return
+        
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
         
         if quote is None:
@@ -650,6 +778,11 @@ async def remove_favorite_callback(callback_query: types.CallbackQuery):
         user_id = str(callback_query.from_user.id)
         index = int(callback_query.data.split("_")[2])
         fav_list = await get_user_favorites(user_id)
+        
+        is_premium = await get_premium_status(int(user_id))
+        if not is_premium:
+            await callback_query.answer("🔒 Только для премиум!", show_alert=True)
+            return
         
         if index >= len(fav_list):
             await callback_query.answer("❌ Цитата не найдена.", show_alert=True)
