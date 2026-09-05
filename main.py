@@ -12,21 +12,18 @@ import aiohttp
 
 try:
     from quotes import QUOTES
-    logging.info(f"✅ Загружено {len(QUOTES)} цитат из quotes.py")
+    logging.info(f"✅ Загружено {len(QUOTES)} цитат")
 except Exception as e:
-    logging.error(f"❌ ОШИБКА ЗАГРУЗКИ quotes.py: {e}")
+    logging.error(f"❌ Ошибка загрузки quotes.py: {e}")
     QUOTES = []
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден!")
 
-# --- Supabase настройки ---
 SUPABASE_URL = "https://foibyfoisadaaobwdmbq.supabase.co"
 SUPABASE_KEY = "sb_publishable_36KIhuPO7H484TorQRuP3g_FDVBWlHj"
 
-# --- ДОСТИЖЕНИЯ ---
 ACHIEVEMENTS = {
     10: {"emoji": "🥉", "text": "10 цитат. Так может каждый."},
     25: {"emoji": "🥉", "text": "25 цитат. Неплохо. Для начала."},
@@ -42,7 +39,7 @@ ACHIEVEMENTS = {
     900: {"emoji": "👑", "text": "900 цитат. Ещё чуть-чуть и ты меня догонишь. Но не догонишь."},
 }
 
-# --- HTTP функции для Supabase ---
+# --- SUPABASE ФУНКЦИИ ---
 async def supabase_get(table: str, user_id: str = None):
     url = f"{SUPABASE_URL}/rest/v1/{table}"
     headers = {
@@ -292,20 +289,24 @@ async def set_commands():
     ]
     await bot.set_my_commands(commands)
 
-# --- ДИАГНОСТИКА: Ловим ВСЕ сообщения ---
+# ============================================
+# ДИАГНОСТИКА - ЛОВИМ ВСЕ СООБЩЕНИЯ
+# ============================================
 @dp.message()
 async def catch_all(message: types.Message):
-    """ВРЕМЕННО: диагностика всех сообщений"""
-    logger.info(f"📩 ВСЕ: {message.text} | Чат: {message.chat.id} | Тип: {message.chat.type}")
+    """Диагностика: ловим все сообщения"""
+    logger.info(f"📩 ПОЛУЧЕНО: {message.text} | Чат: {message.chat.id} | Тип: {message.chat.type}")
     
     # Если это группа — отвечаем
     if message.chat.type in ["group", "supergroup"]:
         await message.answer("✅ Бот видит сообщение в группе!")
 
-# --- ОСНОВНАЯ ОБРАБОТКА СЛОВА "ЦИТАТА" ---
+# ============================================
+# ОСНОВНАЯ ОБРАБОТКА СЛОВА "ЦИТАТА"
+# ============================================
 @dp.message(lambda message: message.text and "цитата" in message.text.lower())
 async def quote_by_keyword(message: types.Message):
-    logger.info(f"🔍 СЛОВО 'ЦИТАТА' найдено! Чат: {message.chat.id}, Тип: {message.chat.type}")
+    logger.info(f"🔍 НАЙДЕНО СЛОВО 'ЦИТАТА'! Чат: {message.chat.id}, Тип: {message.chat.type}")
     
     if message.chat.type in ["group", "supergroup"]:
         chat_id = message.chat.id
