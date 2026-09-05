@@ -581,24 +581,15 @@ async def favorites_command(message: types.Message):
     user_id = str(message.from_user.id)
     await show_favorites_page(message, user_id)
 
-# --- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ (ВКЛЮЧАЯ ГРУППЫ) ---
-@dp.message()
-async def handle_all_messages(message: types.Message):
-    """Обработка всех сообщений для поиска слова 'цитата'"""
-    # Проверяем, есть ли слово "цитата" в сообщении
-    if not message.text:
-        return
-    
-    if "цитата" not in message.text.lower():
-        return
-    
-    logger.info(f"🔍 Найдено слово 'цитата' в чате {message.chat.id}, тип {message.chat.type}")
+# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ ---
+@dp.message(lambda message: message.text and "цитата" in message.text.lower())
+async def quote_by_keyword(message: types.Message):
+    """Обработка слова 'цитата' в сообщениях"""
+    logger.info(f"🔍 Фильтр сработал! Чат: {message.chat.id}, Тип: {message.chat.type}")
     
     # ГРУППЫ — прогресс у чата
     if message.chat.type in ["group", "supergroup"]:
-        logger.info(f"📢 Группа! chat_id={message.chat.id}")
         chat_id = message.chat.id
-        
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(chat_id)
         
         if quote is None:
