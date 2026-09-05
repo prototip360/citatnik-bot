@@ -167,7 +167,7 @@ async def get_premium_status(user_id: int):
 
 # --- Хранилище ---
 last_quotes = {}
-user_timers = {}  # {user_id: {"end_time": datetime, "message_id": int, "chat_id": int}}
+user_timers = {}  # {user_id: {"end_time": datetime}}
 
 async def check_delay(user_id: int, message: types.Message) -> bool:
     """Проверяет задержку 8 секунд для бесплатных в личке"""
@@ -191,21 +191,15 @@ async def check_delay(user_id: int, message: types.Message) -> bool:
                 f"⏳ Подожди ещё {remaining} секунд...\n"
                 f"Купи премиум за 30 Stars — и задержка исчезнет! /premium"
             )
-            # Удаляем сообщение через remaining + 0.5 секунд
             await asyncio.sleep(remaining + 0.5)
             await wait_msg.delete()
             return False
         else:
-            # Таймер истёк, удаляем из памяти
+            # Таймер истёк
             del user_timers[user_id]
     
     # Запускаем таймер на 8 секунд
-    end_time = now + timedelta(seconds=8)
-    user_timers[user_id] = {
-        "end_time": end_time,
-        "message_id": message.message_id,
-        "chat_id": message.chat.id
-    }
+    user_timers[user_id] = {"end_time": now + timedelta(seconds=8)}
     return True
 
 # --- Работа с прогрессом ---
