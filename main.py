@@ -581,12 +581,24 @@ async def favorites_command(message: types.Message):
     user_id = str(message.from_user.id)
     await show_favorites_page(message, user_id)
 
-# --- ОБРАБОТКА СЛОВА "ЦИТАТА" В СООБЩЕНИЯХ ---
-@dp.message(lambda message: message.text and "цитата" in message.text.lower())
-async def quote_by_keyword(message: types.Message):
+# --- ОБРАБОТКА ВСЕХ СООБЩЕНИЙ (ВКЛЮЧАЯ ГРУППЫ) ---
+@dp.message()
+async def handle_all_messages(message: types.Message):
+    """Обработка всех сообщений для поиска слова 'цитата'"""
+    # Проверяем, есть ли слово "цитата" в сообщении
+    if not message.text:
+        return
+    
+    if "цитата" not in message.text.lower():
+        return
+    
+    logger.info(f"🔍 Найдено слово 'цитата' в чате {message.chat.id}, тип {message.chat.type}")
+    
+    # ГРУППЫ — прогресс у чата
     if message.chat.type in ["group", "supergroup"]:
-        # ГРУППЫ — прогресс у чата
+        logger.info(f"📢 Группа! chat_id={message.chat.id}")
         chat_id = message.chat.id
+        
         quote, threshold, emoji, achievement_text = await get_next_quote_for_user(chat_id)
         
         if quote is None:
@@ -599,31 +611,32 @@ async def quote_by_keyword(message: types.Message):
                     f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
                     parse_mode="HTML"
                 )
+        return
+    
+    # ЛИЧНЫЕ ЧАТЫ — прогресс у пользователя
+    user_id = message.from_user.id
+    
+    # Проверяем задержку
+    if not await check_delay(user_id, message):
+        return
+    
+    quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
+    
+    if quote is None:
+        await send_congratulation(message)
     else:
-        # ЛИЧНЫЕ ЧАТЫ — прогресс у пользователя
-        user_id = message.from_user.id
+        last_quotes[user_id] = quote
+        await message.answer(
+            f"📜 {quote}",
+            reply_markup=get_quote_button(),
+            disable_notification=True
+        )
         
-        # Проверяем задержку (между цитатами)
-        if not await check_delay(user_id, message):
-            return
-        
-        quote, threshold, emoji, achievement_text = await get_next_quote_for_user(user_id)
-        
-        if quote is None:
-            await send_congratulation(message)
-        else:
-            last_quotes[user_id] = quote
+        if achievement_text:
             await message.answer(
-                f"📜 {quote}",
-                reply_markup=get_quote_button(),
-                disable_notification=True
+                f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
+                parse_mode="HTML"
             )
-            
-            if achievement_text:
-                await message.answer(
-                    f"{emoji} <b>Достижение!</b>\n\n{achievement_text}",
-                    parse_mode="HTML"
-                )
 
 @dp.message(Command("stop_notify"))
 async def stop_notify_command(message: types.Message):
